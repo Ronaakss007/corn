@@ -490,9 +490,8 @@ async def reset_all_stats():
         logging.error(f"Error resetting stats: {e}")
         return False
 
-# Main function to update download statistics
 async def update_download_stats(user_id: int, username: str, url: str, file_size: int, file_type: str):
-    """Update comprehensive download statistics"""
+    """Update download statistics"""
     try:
         from urllib.parse import urlparse
         
@@ -500,8 +499,14 @@ async def update_download_stats(user_id: int, username: str, url: str, file_size
         parsed = urlparse(url)
         site = parsed.netloc.lower().replace('www.', '')
         
-        # Update user stats in user_data collection
-        await user_data.update_one(
+        print(f"🔄 Updating download stats:")
+        print(f"   User ID: {user_id}")
+        print(f"   File size: {file_size}")
+        print(f"   Site: {site}")
+        print(f"   File type: {file_type}")
+        
+        # First, update user stats with increment operations
+        user_update_result = await user_data.update_one(
             {'_id': user_id},
             {
                 '$inc': {
@@ -510,39 +515,45 @@ async def update_download_stats(user_id: int, username: str, url: str, file_size
                     f'favorite_sites.{site}': 1
                 },
                 '$set': {
-                    'username': username,
                     'last_activity': datetime.now()
                 }
             },
             upsert=True
         )
         
-        # Update global stats in stats_data collection
-        await stats_data.update_one(
-            {'_id': 'bot_stats'},
-            {
-                '$inc': {
-                    'total_downloads': 1,
-                    'total_file_size': file_size,
-                    f'sites.{site}': 1,
-                    f'file_types.{file_type}': 1,
-                    f'top_users.{str(user_id)}': 1,
-                    f'daily_stats.{datetime.now().strftime("%Y-%m-%d")}': 1
-                }
-            },
-            upsert=True
-        )
+        print(f"   User update result: matched={user_update_result.matched_count}, modified={user_update_result.modified_count}")
+        
+        # Update username separately if provided (to avoid conflicts)
+        if username and username.strip():
+            await user_data.update_one(
+                {'_id': user_id},
+                {'$set': {'username': username.strip()}}
+            )
+        
+        # Update global stats
+        await increment_stats('total_downloads', 1)
+        await update_site_stats(site)
+        await update_file_type_stats(file_type)
+        await update_daily_stats()
         
         # Add to download history
-        await add_download_history(user_id, url, f"Downloaded from {site}", file_size, file_type, site)
+        await add_download_history(user_id, url, "Downloaded File", file_size, file_type, site)
         
-        print(f"✅ Download stats updated successfully for user {user_id}")
+        # Verify the update worked
+        updated_user = await user_data.find_one({'_id': user_id})
+        if updated_user:
+            print(f"✅ User stats after update:")
+            print(f"   Total downloads: {updated_user.get('total_downloads', 0)}")
+            print(f"   Total size: {updated_user.get('total_size', 0)}")
+        
         return True
         
     except Exception as e:
-        logging.error(f"Error updating download stats: {e}")
-        print(f"❌ Failed to update download stats: {e}")
+        print(f"❌ Error updating download stats for user {user_id}: {e}")
+        import traceback
+        traceback.print_exc()
         return False
+
 
 # Helper function to format file sizes
 def format_bytes(bytes_value):

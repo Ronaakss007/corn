@@ -489,3 +489,62 @@ async def ping_command(client: Client, message: Message):
         
     except Exception as e:
         await message.reply_text("❌ <b>ᴇʀʀᴏʀ</b>", parse_mode=ParseMode.HTML)
+
+
+@Client.on_message(filters.command("fixstats") & filters.private)
+async def fix_stats_command(client: Client, message: Message):
+    """Fix user stats by recalculating from download history"""
+    try:
+        user_id = message.from_user.id
+        
+        # Get user's download history
+        history = await get_user_download_history(user_id, 1000)  # Get all history
+        
+        if not history:
+            await message.reply_text("❌ <b>ɴᴏ ᴅᴏᴡɴʟᴏᴀᴅ ʜɪsᴛᴏʀʏ ғᴏᴜɴᴅ</b>", parse_mode=ParseMode.HTML)
+            return
+        
+        # Calculate totals from history
+        total_downloads = len(history)
+        total_size = sum(item.get('file_size', 0) for item in history)
+        
+        # Calculate favorite sites
+        favorite_sites = {}
+        for item in history:
+            site = item.get('site', 'unknown')
+            favorite_sites[site] = favorite_sites.get(site, 0) + 1
+        
+        # Update user with calculated stats
+        await user_data.update_one(
+            {'_id': user_id},
+            {
+                '$set': {
+                    'total_downloads': total_downloads,
+                    'total_size': total_size,
+                    'favorite_sites': favorite_sites,
+                    'last_activity': datetime.now()
+                }
+            }
+        )
+        
+        def format_size(size_bytes):
+            if size_bytes == 0:
+                return "0 B"
+            size_names = ["B", "KB", "MB", "GB", "TB"]
+            import math
+            i = int(math.floor(math.log(size_bytes, 1024)))
+            p = math.pow(1024, i)
+            s = round(size_bytes / p, 2)
+            return f"{s} {size_names[i]}"
+        
+        await message.reply_text(
+            f"✅ <b>sᴛᴀᴛs ғɪxᴇᴅ!</b>\n\n"
+            f"📥 <b>ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {total_downloads:,}\n"
+            f"💾 <b>ᴛᴏᴛᴀʟ sɪᴢᴇ:</b> {format_size(total_size)}\n"
+            f"🌐 <b>sɪᴛᴇs:</b> {len(favorite_sites)}",
+            parse_mode=ParseMode.HTML
+        )
+        
+    except Exception as e:
+        print(f"❌ Error fixing stats: {e}")
+        await message.reply_text("❌ <b>ᴇʀʀᴏʀ ғɪxɪɴɢ sᴛᴀᴛs</b>", parse_mode=ParseMode.HTML)
