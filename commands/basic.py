@@ -18,7 +18,6 @@ async def start_command(client: Client, message: Message):
             f"• ᴘᴏʀɴʜᴜʙ, xᴠɪᴅᴇᴏs, xɴxx\n"
             f"• ᴀɴᴅ 1000+ ᴏᴛʜᴇʀ sɪᴛᴇs!\n\n"
             f"🚀 <b>ᴊᴜsᴛ sᴇɴᴅ ᴍᴇ ᴀ ʟɪɴᴋ!</b>\n\n"
-            f"💡 ᴜsᴇ /help ғᴏʀ ᴍᴏʀᴇ ɪɴғᴏ"
         )
         
         await message.reply_text(welcome_text, parse_mode=ParseMode.HTML)

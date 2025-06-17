@@ -4,12 +4,12 @@ class Config:
     # Telegram Bot Configuration - Hardcoded
     API_ID = 21145186
     API_HASH = "daa53f4216112ad22b8a8f6299936a46"
-    BOT_TOKEN = "7806754713:AAE9kpSexdgBeIBlwy-3sJ4Bxu6IJn5CETs"
+    BOT_TOKEN = "7739933531:AAEyCzJ2XNOQEZ7o5cL9MScSlKwFij46Q_w"
     
     # Bot Settings
-    BOT_NAME = "YT-DLP Leech Bot"
+    BOT_NAME = "VɪᴅXᴛʀᴀᴄᴛᴏʀ"
     USER_SESSION = os.environ.get('USER_SESSION', 'BQGgvekAhGtAusgb66BX32jWE1XUescDL7s7WHqvH6cfRnf3SYD-IiNPjYhnZOMJkIgCSoklbnO_h0iQ_ad-jivTuQjw7Agop8Tx1GGFmQvBk38aARDevNLSruvp0ukAD3vrmpPHpw5siUgGRCYaOowF8z7w8fGAvgfC7godgPksgidWIaEZUOvEbxbcA2qMEDxEQ5UilBfm8SDvdXhJDzw4hPrsk5-4xPm_3Hc6KCLeOfin_uXiGuVhBwLuPdnbvcifa1u_WpFAduUw87nmmAzfIjEeAoUrhLqtqbdwaDF5ORtwoJ83f8kb04XEXbG13tURp_uf8Ll--PCc2QXfSlU_y117rgAAAAHCqoS-AA')
-    BOT_USERNAME = "ytdl_leech_bot"
+    BOT_USERNAME = "vidxtractorbot"
     
     # Download Configuration
     DOWNLOAD_DIR = "./downloads/"

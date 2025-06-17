@@ -612,6 +612,7 @@ async def download_and_send(client, message, status_msg, url, user_id):
                             chat_id=message.chat.id,
                             from_chat_id=DUMP_CHAT_IDS[0],
                             message_id=dump_message.id,
+                            has_spoiler=True,
                             reply_markup=user_keyboard  # Only for user messages
                         )
                     except Exception as e:
@@ -620,7 +621,8 @@ async def download_and_send(client, message, status_msg, url, user_id):
                         await client.copy_message(
                             chat_id=message.chat.id,
                             from_chat_id=DUMP_CHAT_IDS[0],
-                            message_id=dump_message.id
+                            message_id=dump_message.id,
+                            has_spoiler=True
                         )
                     
                     # Update stats

@@ -98,7 +98,7 @@ async def initialize_user_client():
     except Exception as e:
         print(f"❌ Failed to initialize user session: {e}")
         user_client = None
-        
+
 def get_indian_time():
     """
     Get current time in Indian Standard Time (IST)
@@ -266,10 +266,11 @@ class Bot(Client):
         try:
             startup_message = (
                 f"<b>"
-                f"🤖 YT-DLP Bot Started Successfully...!\n\n"
-                f"<blockquote>⏰ Started: {self.uptime.strftime('%Y-%m-%d %H:%M:%S IST')}\n"
+                f"🤖 ᴠɪᴅxᴛʀᴀᴄᴛᴏʀ Bot Started Successfully...!\n\n"
+                f"<blockquote expandable>⏰ Started: {self.uptime.strftime('%Y-%m-%d %H:%M:%S IST')}\n"
                 f"🆔 Bot ID: {(await self.get_me()).id}\n"
-                f"👨‍💻 Bot Username: @{self.username}"
+                f"👨‍💻 Bot Username: @{self.username}\n\n"
+                f"💝 Made with love by ❰ ×× <a href='https://t.me/shizukawachan'>sʜɪᴢᴜᴋᴀ</a> -//- ❱\n"
                 f"</blockquote></b>"
             )
             
@@ -283,6 +284,7 @@ class Bot(Client):
                 
         except Exception as e:
             print(f"❌ Failed to send startup notification: {e}")
+
 
 
 
