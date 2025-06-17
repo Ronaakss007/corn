@@ -4,7 +4,7 @@ from pyrogram.errors import UserNotParticipant
 from pyrogram.enums import ParseMode
 from config import Config
 import os
-from database import get_settings, update_settings, has_pending_request, store_join_request, remove_join_request
+from database import *
 from datetime import datetime
 
 OWNER_ID = int(os.environ.get("OWNER_ID", "7560922302"))
