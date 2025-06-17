@@ -103,7 +103,7 @@ async def check_subscription(client: Client, message: Message) -> bool:
             try:
                 chat = await client.get_chat(channel)
                 invite_link = await client.create_chat_invite_link(channel, creates_join_request=True)
-                btn = InlineKeyboardButton(f"⚡ {chat.title} (request)", url=invite_link.invite_link)
+                btn = InlineKeyboardButton(f"{chat.title}", url=invite_link.invite_link)
                 temp_buttons.append(btn)
                 if len(temp_buttons) == 2:
                     buttons.append(temp_buttons)
