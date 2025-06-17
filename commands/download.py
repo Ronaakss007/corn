@@ -764,6 +764,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
         file_name = os.path.basename(file_path)
         
         # Initialize progress tracking variables
+        # Initialize progress tracking variables
         last_update = 0
         upload_start_time = time.time()
         last_uploaded = 0
@@ -788,7 +789,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
             nonlocal last_update, last_uploaded, upload_start_time
             try:
                 now = time.time()
-                if now - last_update < 1:  # Update every 1 second
+                if now - last_update < 0.5:  # Update every 0.5 seconds
                     return
                 
                 # Calculate real-time speed
@@ -829,20 +830,35 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                     f"<b>⏱️ ᴇᴛᴀ:</b> {format_time(eta)}"
                 )
                 
-                # Update status message safely
+                # Update status message with proper async handling
                 try:
                     loop = asyncio.get_event_loop()
-                    loop.create_task(safe_edit_message(status_msg, status_text))
+                    if loop.is_running():
+                        asyncio.ensure_future(safe_edit_message(status_msg, status_text))
                 except Exception:
                     pass
                 
             except Exception:
                 pass
+        
+        # Create caption with metadata - NO INLINE KEYBOARD for dump channels
         metadata = progress_tracker.metadata
         if part_num and total_parts:
             caption = f"<b>📁 {file_name}</b>\n<b>📦 Part {part_num}/{total_parts} | {format_bytes(file_size)}</b>\n\n"
         else:
             caption = f"<b>📁 {file_name}</b>\n<b>📦 {format_bytes(file_size)}</b>\n\n"
+        
+        # Add metadata if available
+        if metadata:
+            if metadata.get('title'):
+                caption += f"<b>🎬 ᴛɪᴛʟᴇ:</b> {metadata['title'][:50]}{'...' if len(metadata['title']) > 50 else ''}\n"
+            if metadata.get('duration'):
+                caption += f"<b>⏱️ ᴅᴜʀᴀᴛɪᴏɴ:</b> {metadata['duration_string']}\n"
+            if metadata.get('uploader'):
+                caption += f"<b>👤 ᴜᴘʟᴏᴀᴅᴇʀ:</b> {metadata['uploader'][:30]}{'...' if len(metadata['uploader']) > 30 else ''}\n"
+            caption += "\n"
+        
+        caption += f"<b>🤖 ᴜᴘʟᴏᴀᴅᴇᴅ ʙʏ:</b> @{Config.BOT_USERNAME}"
         
         # Generate thumbnail for videos
         thumbnail_path = None
@@ -864,7 +880,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
         for attempt in range(max_retries):
             try:
                 if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
-                    # Send as video with progress tracking
+                    # Send as video to DUMP CHANNEL - NO KEYBOARD
                     dump_message = await upload_client.send_video(
                         chat_id=dump_id,
                         video=file_path,
@@ -878,12 +894,11 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                         parse_mode=ParseMode.HTML
                     )
                 elif file_path.lower().endswith(('.mp3', '.m4a', '.wav', '.flac', '.ogg')):
-                    # Send as audio with progress tracking
+                    # Send as audio to DUMP CHANNEL - NO KEYBOARD
                     dump_message = await upload_client.send_audio(
                         chat_id=dump_id,
                         audio=file_path,
                         caption=caption,
-                        # reply_markup=keyboard,
                         duration=int(metadata.get('duration', 0)) if metadata else 0,
                         performer=metadata.get('uploader', 'Unknown') if metadata else 'Unknown',
                         title=metadata.get('title', file_name) if metadata else file_name,
@@ -892,12 +907,11 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                         parse_mode=ParseMode.HTML
                     )
                 else:
-                    # Send as document with progress tracking
+                    # Send as document to DUMP CHANNEL - NO KEYBOARD
                     dump_message = await upload_client.send_document(
                         chat_id=dump_id,
                         document=file_path,
                         caption=caption,
-                        # reply_markup=keyboard,
                         thumb=thumbnail_path,
                         progress=upload_progress,
                         parse_mode=ParseMode.HTML
@@ -941,8 +955,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                 f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
                 f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
                 f"<b>⏱️ ᴛɪᴍᴇ ᴛᴀᴋᴇɴ:</b> {format_time(upload_time)}\n"
-                f"<b>📈 ᴀᴠᴇʀᴀɢᴇ sᴘᴇᴇᴅ:</b> {format_bytes(avg_speed)}/s\n"
-                f"<b>📤 sᴇɴᴅɪɴɢ ᴛᴏ ᴜsᴇʀ...</b>",
+                f"<b>📈 ᴀᴠᴇʀᴀɢᴇ sᴘᴇᴇᴅ:</b> {format_bytes(avg_speed)}/s",
                 parse_mode=ParseMode.HTML
             )
         
@@ -963,8 +976,22 @@ async def safe_edit_message(message, text):
     try:
         await message.edit_text(text, parse_mode=ParseMode.HTML)
     except Exception:
-        # Silently ignore all edit errors
+        # Silently ignore all edit errors (rate limits, message not modified, etc.)
         pass
+
+def cleanup_files(directory):
+    """Clean up downloaded files"""
+    try:
+        if os.path.exists(directory):
+            for file in os.listdir(directory):
+                file_path = os.path.join(directory, file)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+            os.rmdir(directory)
+            print(f"✅ Cleaned up: {directory}")
+    except Exception as e:
+        print(f"❌ Cleanup error: {e}")
+
 
 async def update_progress(status_msg, user_id, url):
     """Update progress message every few seconds"""
