@@ -1189,11 +1189,13 @@ async def cancel_command(client: Client, message: Message):
 async def stats_command(client: Client, message: Message):
     """Handle /stats command with database integration"""
 
-    if user_id not in [7560922302]:  # Replace with your admin ID
-        await message.reply_text("❌ <b>ᴀᴅᴍɪɴ ᴏɴʟʏ ᴄᴏᴍᴍᴀɴᴅ!</b>", parse_mode=ParseMode.HTML)
-        return
-    
     try:
+        user_id = message.from_user.id
+        
+        # Check if user is admin (optional)
+        if user_id not in [7560922302]:  # Replace with your admin ID
+            await message.reply_text("❌ <b>ᴀᴅᴍɪɴ ᴏɴʟʏ ᴄᴏᴍᴍᴀɴᴅ!</b>", parse_mode=ParseMode.HTML)
+            return
         
         # Get stats from database
         stats = await get_stats()
