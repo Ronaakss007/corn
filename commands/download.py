@@ -13,10 +13,53 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import ParseMode
 from config import Config
+from pyrogram import Client
+from pyrogram.errors import FloodWait
+import math
 import sys
 # Add this import
 from database import *
 
+user_client = None
+
+def split_file(file_path, chunk_size=1.98 * 1024 * 1024 * 1024):  # 1.98GB
+    """Split large files into smaller chunks"""
+    try:
+        file_size = os.path.getsize(file_path)
+        if file_size <= chunk_size:
+            return [file_path]  # No need to split
+        
+        file_name = os.path.basename(file_path)
+        file_dir = os.path.dirname(file_path)
+        name, ext = os.path.splitext(file_name)
+        
+        chunks = []
+        chunk_num = 1
+        
+        with open(file_path, 'rb') as input_file:
+            while True:
+                chunk_data = input_file.read(int(chunk_size))
+                if not chunk_data:
+                    break
+                
+                chunk_filename = f"{name}.part{chunk_num:03d}{ext}"
+                chunk_path = os.path.join(file_dir, chunk_filename)
+                
+                with open(chunk_path, 'wb') as chunk_file:
+                    chunk_file.write(chunk_data)
+                
+                chunks.append(chunk_path)
+                chunk_num += 1
+        
+        # Remove original file after splitting
+        os.remove(file_path)
+        print(f"✅ File split into {len(chunks)} parts")
+        return chunks
+        
+    except Exception as e:
+        print(f"❌ Error splitting file: {e}")
+        return [file_path]
+    
 async def register_new_user(user_id, username, first_name):
     """Register new user in database only if they don't exist"""
     try:
@@ -592,37 +635,108 @@ async def download_and_send(client, message, status_msg, url, user_id):
             del active_downloads[user_id]
 
 async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_msg):
-    """Upload file to dump channel with progress"""
+    """Upload file to dump channel with progress using user session if available"""
+    try:
+        # Use user client if available, otherwise use bot client
+        upload_client = user_client if user_client else client
+        
+        file_size = os.path.getsize(file_path)
+        file_name = os.path.basename(file_path)
+        
+        # Check if file needs splitting
+        if file_size > 1.98 * 1024 * 1024 * 1024:  # 1.98GB
+            print(f"📦 File too large ({format_bytes(file_size)}), splitting...")
+            await status_msg.edit_text(
+                f"<b>📦 sᴘʟɪᴛᴛɪɴɢ ʟᴀʀɢᴇ ғɪʟᴇ</b>\n\n"
+                f"<b>📁 ғɪʟᴇ:</b> {file_name}\n"
+                f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
+                f"<b>⏳ sᴛᴀᴛᴜs:</b> sᴘʟɪᴛᴛɪɴɢ...",
+                parse_mode=ParseMode.HTML
+            )
+            
+            file_chunks = split_file(file_path)
+            uploaded_messages = []
+            
+            for i, chunk_path in enumerate(file_chunks, 1):
+                chunk_size = os.path.getsize(chunk_path)
+                chunk_name = os.path.basename(chunk_path)
+                
+                await status_msg.edit_text(
+                    f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {i}/{len(file_chunks)}</b>\n\n"
+                    f"<b>📁 ғɪʟᴇ:</b> {chunk_name}\n"
+                    f"<b>💾 sɪᴢᴇ:</b> {format_bytes(chunk_size)}\n"
+                    f"<b>⏳ sᴛᴀᴛᴜs:</b> ᴜᴘʟᴏᴀᴅɪɴɢ...",
+                    parse_mode=ParseMode.HTML
+                )
+                
+                # Upload chunk
+                chunk_msg = await upload_single_file(upload_client, chunk_path, dump_id, progress_tracker, status_msg, i, len(file_chunks))
+                if chunk_msg:
+                    uploaded_messages.append(chunk_msg)
+                
+                # Clean up chunk file
+                try:
+                    os.remove(chunk_path)
+                except:
+                    pass
+            
+            return uploaded_messages[0] if uploaded_messages else None
+        else:
+            # Upload single file
+            return await upload_single_file(upload_client, file_path, dump_id, progress_tracker, status_msg)
+        
+    except Exception as e:
+        print(f"❌ Error uploading to dump: {e}")
+        return None
+    
+async def upload_single_file(upload_client, file_path, dump_id, progress_tracker, status_msg, part_num=None, total_parts=None):
+    """Upload a single file with progress tracking"""
     try:
         file_size = os.path.getsize(file_path)
         file_name = os.path.basename(file_path)
         
-        # Progress callback for upload
+        # Enhanced progress callback for faster updates
+        last_update = 0
         def upload_progress(current, total):
+            nonlocal last_update
             try:
+                now = time.time()
+                if now - last_update < 1:  # Update every 1 second instead of 3
+                    return
+                last_update = now
+                
                 progress_tracker.upload_progress = current
                 progress_tracker.upload_total = total
                 percentage = (current / total) * 100 if total > 0 else 0
-                speed = current / (time.time() - progress_tracker.start_time) if (time.time() - progress_tracker.start_time) > 0 else 0
+                speed = current / (now - progress_tracker.start_time) if (now - progress_tracker.start_time) > 0 else 0
                 
-                # Update status message
-                asyncio.create_task(status_msg.edit_text(
-                    f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ</b>\n\n"
+                # Create status text
+                if part_num and total_parts:
+                    status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {part_num}/{total_parts}</b>\n\n"
+                else:
+                    status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ</b>\n\n"
+                
+                status_text += (
                     f"<b>📁 ғɪʟᴇ:</b> {file_name}\n"
                     f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
                     f"<b>📊 ᴘʀᴏɢʀᴇss:</b> {percentage:.1f}%\n"
                     f"<b>⚡ sᴘᴇᴇᴅ:</b> {format_bytes(speed)}/s\n"
-                    f"<b>📤 ᴜᴘʟᴏᴀᴅᴇᴅ:</b> {format_bytes(current)} / {format_bytes(total)}",
-                    parse_mode=ParseMode.HTML
-                ))
+                    f"<b>📤 ᴜᴘʟᴏᴀᴅᴇᴅ:</b> {format_bytes(current)} / {format_bytes(total)}"
+                )
+                
+                # Update status message asynchronously
+                asyncio.create_task(safe_edit_message(status_msg, status_text))
             except:
                 pass
         
-        # Create caption
+        # Create caption with part info if applicable
         metadata = progress_tracker.metadata
-        caption = f"<b>{file_name} | {format_bytes(file_size)} </b>\n\n"
+        if part_num and total_parts:
+            caption = f"<b>{file_name} | Part {part_num}/{total_parts} | {format_bytes(file_size)}</b>\n\n"
+        else:
+            caption = f"<b>{file_name} | {format_bytes(file_size)}</b>\n\n"
         
-        # Generate thumbnail
+        # Generate thumbnail for videos
         thumbnail_path = None
         if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
             thumbnail_path = f"{os.path.dirname(file_path)}/thumb_{int(time.time())}.jpg"
@@ -630,49 +744,66 @@ async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_ms
             if not generated_thumb:
                 thumbnail_path = None
         
-        # Get video dimensions for videos
+        # Get video dimensions
         width, height = 1280, 720
         if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
             width, height = await get_video_dimensions(file_path)
         
-        # Upload based on file type
-        if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
-            # Send as video
-            dump_message = await client.send_video(
-                chat_id=dump_id,
-                video=file_path,
-                caption=caption,
-                supports_streaming=True,
-                thumb=thumbnail_path,
-                duration=int(metadata.get('duration', 0)) if metadata else 0,
-                width=width,
-                height=height,
-                progress=upload_progress,
-                parse_mode=ParseMode.HTML
-            )
-        elif file_path.lower().endswith(('.mp3', '.m4a', '.wav', '.flac', '.ogg')):
-            # Send as audio
-            dump_message = await client.send_audio(
-                chat_id=dump_id,
-                audio=file_path,
-                caption=caption,
-                duration=int(metadata.get('duration', 0)) if metadata else 0,
-                performer=metadata.get('uploader', 'Unknown') if metadata else 'Unknown',
-                title=metadata.get('title', file_name) if metadata else file_name,
-                thumb=thumbnail_path,
-                progress=upload_progress,
-                parse_mode=ParseMode.HTML
-            )
-        else:
-            # Send as document
-            dump_message = await client.send_document(
-                chat_id=dump_id,
-                document=file_path,
-                caption=caption,
-                thumb=thumbnail_path,
-                progress=upload_progress,
-                parse_mode=ParseMode.HTML
-            )
+        # Upload with retry mechanism for FloodWait
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
+                    # Send as video
+                    dump_message = await upload_client.send_video(
+                        chat_id=dump_id,
+                        video=file_path,
+                        caption=caption,
+                        supports_streaming=True,
+                        thumb=thumbnail_path,
+                        duration=int(metadata.get('duration', 0)) if metadata else 0,
+                        width=width,
+                        height=height,
+                        progress=upload_progress,
+                        parse_mode=ParseMode.HTML
+                    )
+                elif file_path.lower().endswith(('.mp3', '.m4a', '.wav', '.flac', '.ogg')):
+                    # Send as audio
+                    dump_message = await upload_client.send_audio(
+                        chat_id=dump_id,
+                        audio=file_path,
+                        caption=caption,
+                        duration=int(metadata.get('duration', 0)) if metadata else 0,
+                        performer=metadata.get('uploader', 'Unknown') if metadata else 'Unknown',
+                        title=metadata.get('title', file_name) if metadata else file_name,
+                        thumb=thumbnail_path,
+                        progress=upload_progress,
+                        parse_mode=ParseMode.HTML
+                    )
+                else:
+                    # Send as document
+                    dump_message = await upload_client.send_document(
+                        chat_id=dump_id,
+                        document=file_path,
+                        caption=caption,
+                        thumb=thumbnail_path,
+                        progress=upload_progress,
+                        parse_mode=ParseMode.HTML
+                    )
+                break  # Success, exit retry loop
+                
+            except FloodWait as e:
+                if attempt < max_retries - 1:
+                    print(f"⏳ FloodWait: waiting {e.value} seconds...")
+                    await asyncio.sleep(e.value)
+                else:
+                    raise e
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"❌ Upload attempt {attempt + 1} failed: {e}")
+                    await asyncio.sleep(2)
+                else:
+                    raise e
         
         # Clean up thumbnail
         if thumbnail_path and os.path.exists(thumbnail_path):
@@ -684,8 +815,15 @@ async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_ms
         return dump_message
         
     except Exception as e:
-        print(f"❌ Error uploading to dump: {e}")
+        print(f"❌ Error uploading single file: {e}")
         return None
+
+async def safe_edit_message(message, text):
+    """Safely edit message without throwing exceptions"""
+    try:
+        await message.edit_text(text, parse_mode=ParseMode.HTML)
+    except:
+        pass  # Ignore all edit errors
 
 async def update_progress(status_msg, user_id, url):
     """Update progress message every few seconds"""

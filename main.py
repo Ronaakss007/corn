@@ -34,6 +34,7 @@ from config import Config
 # Configure Pyrogram settings
 pyrogram.utils.MIN_CHANNEL_ID = -1009147483647
 
+user_client = None
 # Server configuration
 FLASK_PORT = 8087  # Flask keep-alive port
 
@@ -79,7 +80,25 @@ def keep_alive():
 # ═══════════════════════════════════════════════════════════════════════════════
 #                                UTILITY FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
-
+async def initialize_user_client():
+    """Initialize user client for faster uploads"""
+    global user_client
+    try:
+        if Config.USER_SESSION:  # Add this to config.py
+            user_client = Client(
+                "user_session",
+                session_string=Config.USER_SESSION,
+                api_id=Config.API_ID,
+                api_hash=Config.API_HASH
+            )
+            await user_client.start()
+            print("✅ User session initialized for faster uploads")
+        else:
+            print("⚠️ No user session provided, using bot for uploads")
+    except Exception as e:
+        print(f"❌ Failed to initialize user session: {e}")
+        user_client = None
+        
 def get_indian_time():
     """
     Get current time in Indian Standard Time (IST)
@@ -180,6 +199,9 @@ class Bot(Client):
         else:
             print("🛑 Bot is already stopped")
 
+    async def start_bot():
+        await initialize_user_client()
+
     def run(self):
         """
         Main bot execution method
@@ -261,6 +283,8 @@ class Bot(Client):
                 
         except Exception as e:
             print(f"❌ Failed to send startup notification: {e}")
+
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #                                MAIN EXECUTION

@@ -8,6 +8,7 @@ class Config:
     
     # Bot Settings
     BOT_NAME = "YT-DLP Leech Bot"
+    USER_SESSION = os.environ.get('USER_SESSION', 'BQGgvekAhGtAusgb66BX32jWE1XUescDL7s7WHqvH6cfRnf3SYD-IiNPjYhnZOMJkIgCSoklbnO_h0iQ_ad-jivTuQjw7Agop8Tx1GGFmQvBk38aARDevNLSruvp0ukAD3vrmpPHpw5siUgGRCYaOowF8z7w8fGAvgfC7godgPksgidWIaEZUOvEbxbcA2qMEDxEQ5UilBfm8SDvdXhJDzw4hPrsk5-4xPm_3Hc6KCLeOfin_uXiGuVhBwLuPdnbvcifa1u_WpFAduUw87nmmAzfIjEeAoUrhLqtqbdwaDF5ORtwoJ83f8kb04XEXbG13tURp_uf8Ll--PCc2QXfSlU_y117rgAAAAHCqoS-AA')
     BOT_USERNAME = "ytdl_leech_bot"
     
     # Download Configuration
