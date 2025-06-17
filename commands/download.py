@@ -410,7 +410,11 @@ def check_admin(_, __, message):
     """Check if user is admin"""
     return Config.is_admin(message.from_user.id)
 
-@Client.on_message(filters.private & ~filters.command(["start", "help", "stats", "mystats", "leaderboard", "history", "cancel"]))
+@Client.on_message(filters.private & ~filters.command([
+    "start", "help", "stats", "mystats", "leaderboard", "history", "cancel",
+    "fix_dumps", "check_dumps", "force_meet", "reset_stats", "broadcast", 
+    "watermark", "logs", "cleanup", "restart", "test"
+]))
 async def handle_url_message(client: Client, message: Message):
     """Handle URL messages for download"""
     try:
@@ -688,53 +692,95 @@ async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_ms
     except Exception as e:
         print(f"❌ Error uploading to dump: {e}")
         return None
-    
+
 async def upload_single_file(upload_client, file_path, dump_id, progress_tracker, status_msg, part_num=None, total_parts=None):
-    """Upload a single file with progress tracking"""
+    """Upload a single file with progress tracking and speed display"""
     try:
+        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        
         file_size = os.path.getsize(file_path)
         file_name = os.path.basename(file_path)
         
-        # Enhanced progress callback for faster updates
+        # Enhanced progress callback with speed calculation
         last_update = 0
+        upload_start_time = time.time()
+        last_uploaded = 0
+        
         def upload_progress(current, total):
-            nonlocal last_update
+            nonlocal last_update, last_uploaded
             try:
                 now = time.time()
-                if now - last_update < 1:  # Update every 1 second instead of 3
+                if now - last_update < 1:  # Update every 1 second
                     return
+                
+                # Calculate speed
+                time_diff = now - last_update if last_update > 0 else 1
+                bytes_diff = current - last_uploaded
+                current_speed = bytes_diff / time_diff if time_diff > 0 else 0
+                
+                # Calculate average speed
+                total_time = now - upload_start_time
+                avg_speed = current / total_time if total_time > 0 else 0
+                
+                # Calculate ETA
+                remaining_bytes = total - current
+                eta = remaining_bytes / avg_speed if avg_speed > 0 else 0
+                
                 last_update = now
+                last_uploaded = current
                 
                 progress_tracker.upload_progress = current
                 progress_tracker.upload_total = total
                 percentage = (current / total) * 100 if total > 0 else 0
-                speed = current / (now - progress_tracker.start_time) if (now - progress_tracker.start_time) > 0 else 0
                 
-                # Create status text
+                # Create progress bar
+                progress_bar = create_progress_bar(percentage)
+                
+                # Create status text with detailed progress
                 if part_num and total_parts:
                     status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {part_num}/{total_parts}</b>\n\n"
                 else:
-                    status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ</b>\n\n"
+                    status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴛᴏ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟ</b>\n\n"
                 
                 status_text += (
-                    f"<b>📁 ғɪʟᴇ:</b> {file_name}\n"
-                    f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
-                    f"<b>📊 ᴘʀᴏɢʀᴇss:</b> {percentage:.1f}%\n"
-                    f"<b>⚡ sᴘᴇᴇᴅ:</b> {format_bytes(speed)}/s\n"
-                    f"<b>📤 ᴜᴘʟᴏᴀᴅᴇᴅ:</b> {format_bytes(current)} / {format_bytes(total)}"
+                    f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+                    f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n\n"
+                    f"<b>📊 ᴘʀᴏɢʀᴇss:</b>\n"
+                    f"<code>{progress_bar}</code> <b>{percentage:.1f}%</b>\n\n"
+                    f"<b>📤 ᴜᴘʟᴏᴀᴅᴇᴅ:</b> {format_bytes(current)} / {format_bytes(total)}\n"
+                    f"<b>⚡ ᴄᴜʀʀᴇɴᴛ sᴘᴇᴇᴅ:</b> {format_bytes(current_speed)}/s\n"
+                    f"<b>📈 ᴀᴠᴇʀᴀɢᴇ sᴘᴇᴇᴅ:</b> {format_bytes(avg_speed)}/s\n"
+                    f"<b>⏱️ ᴇᴛᴀ:</b> {format_time(eta)}"
                 )
                 
                 # Update status message asynchronously
                 asyncio.create_task(safe_edit_message(status_msg, status_text))
-            except:
-                pass
+            except Exception as e:
+                print(f"Progress update error: {e}")
         
         # Create caption with part info if applicable
         metadata = progress_tracker.metadata
         if part_num and total_parts:
-            caption = f"<b>{file_name} | Part {part_num}/{total_parts} | {format_bytes(file_size)}</b>\n\n"
+            caption = f"<b>📁 {file_name}</b>\n<b>📦 Part {part_num}/{total_parts} | {format_bytes(file_size)}</b>\n\n"
         else:
-            caption = f"<b>{file_name} | {format_bytes(file_size)}</b>\n\n"
+            caption = f"<b>📁 {file_name}</b>\n<b>📦 {format_bytes(file_size)}</b>\n\n"
+        
+        # Add metadata if available
+        if metadata:
+            if metadata.get('title'):
+                caption += f"<b>🎬 ᴛɪᴛʟᴇ:</b> {metadata['title'][:50]}{'...' if len(metadata['title']) > 50 else ''}\n"
+            if metadata.get('duration'):
+                caption += f"<b>⏱️ ᴅᴜʀᴀᴛɪᴏɴ:</b> {metadata['duration_string']}\n"
+            if metadata.get('uploader'):
+                caption += f"<b>👤 ᴜᴘʟᴏᴀᴅᴇʀ:</b> {metadata['uploader'][:30]}{'...' if len(metadata['uploader']) > 30 else ''}\n"
+            caption += "\n"
+        
+        caption += f"<b>🤖 ᴜᴘʟᴏᴀᴅᴇᴅ ʙʏ:</b> @{Config.BOT_USERNAME}"
+        
+        # Create inline keyboard with channel button
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📺 ᴅɪʀᴇᴄᴛ ᴠɪᴅᴇᴏs ᴄʜᴀɴɴᴇʟ", url="https://t.me/shizukawachan/20")]
+        ])
         
         # Generate thumbnail for videos
         thumbnail_path = None
@@ -751,6 +797,8 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
         
         # Upload with retry mechanism for FloodWait
         max_retries = 3
+        dump_message = None
+        
         for attempt in range(max_retries):
             try:
                 if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
@@ -759,6 +807,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                         chat_id=dump_id,
                         video=file_path,
                         caption=caption,
+                        reply_markup=keyboard,
                         supports_streaming=True,
                         thumb=thumbnail_path,
                         duration=int(metadata.get('duration', 0)) if metadata else 0,
@@ -773,6 +822,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                         chat_id=dump_id,
                         audio=file_path,
                         caption=caption,
+                        reply_markup=keyboard,
                         duration=int(metadata.get('duration', 0)) if metadata else 0,
                         performer=metadata.get('uploader', 'Unknown') if metadata else 'Unknown',
                         title=metadata.get('title', file_name) if metadata else file_name,
@@ -786,6 +836,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                         chat_id=dump_id,
                         document=file_path,
                         caption=caption,
+                        reply_markup=keyboard,
                         thumb=thumbnail_path,
                         progress=upload_progress,
                         parse_mode=ParseMode.HTML
@@ -795,6 +846,12 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
             except FloodWait as e:
                 if attempt < max_retries - 1:
                     print(f"⏳ FloodWait: waiting {e.value} seconds...")
+                    await status_msg.edit_text(
+                        f"<b>⏳ ʀᴀᴛᴇ ʟɪᴍɪᴛ ʜɪᴛ</b>\n\n"
+                        f"<b>⏰ ᴡᴀɪᴛɪɴɢ:</b> {e.value} sᴇᴄᴏɴᴅs\n"
+                        f"<b>📁 ғɪʟᴇ:</b> {file_name}",
+                        parse_mode=ParseMode.HTML
+                    )
                     await asyncio.sleep(e.value)
                 else:
                     raise e
@@ -812,18 +869,41 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
             except:
                 pass
         
+        # Final upload success message
+        if dump_message:
+            upload_time = time.time() - upload_start_time
+            avg_speed = file_size / upload_time if upload_time > 0 else 0
+            
+            await status_msg.edit_text(
+                f"<b>✅ ᴜᴘʟᴏᴀᴅ ᴄᴏᴍᴘʟᴇᴛᴇᴅ!</b>\n\n"
+                f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+                f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
+                f"<b>⏱️ ᴛɪᴍᴇ ᴛᴀᴋᴇɴ:</b> {format_time(upload_time)}\n"
+                f"<b>📈 ᴀᴠᴇʀᴀɢᴇ sᴘᴇᴇᴅ:</b> {format_bytes(avg_speed)}/s\n"
+                f"<b>📤 sᴇɴᴅɪɴɢ ᴛᴏ ᴜsᴇʀ...</b>",
+                parse_mode=ParseMode.HTML
+            )
+        
         return dump_message
         
     except Exception as e:
         print(f"❌ Error uploading single file: {e}")
+        await status_msg.edit_text(
+            f"<b>❌ ᴜᴘʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
+            f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+            f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
+            parse_mode=ParseMode.HTML
+        )
         return None
 
 async def safe_edit_message(message, text):
     """Safely edit message without throwing exceptions"""
     try:
         await message.edit_text(text, parse_mode=ParseMode.HTML)
-    except:
-        pass  # Ignore all edit errors
+    except Exception as e:
+        # Ignore message edit errors (like message not modified, etc.)
+        pass
+
 
 async def update_progress(status_msg, user_id, url):
     """Update progress message every few seconds"""
