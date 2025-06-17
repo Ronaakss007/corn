@@ -491,7 +491,7 @@ async def reset_all_stats():
         return False
 
 async def update_download_stats(user_id: int, username: str, url: str, file_size: int, file_type: str):
-    """Update download statistics"""
+    """Update download statistics - Fixed version"""
     try:
         from urllib.parse import urlparse
         
@@ -499,52 +499,72 @@ async def update_download_stats(user_id: int, username: str, url: str, file_size
         parsed = urlparse(url)
         site = parsed.netloc.lower().replace('www.', '')
         
-        print(f"🔄 Updating download stats:")
-        print(f"   User ID: {user_id}")
-        print(f"   File size: {file_size}")
+        print(f"🔄 Starting stats update for user {user_id}")
         print(f"   Site: {site}")
+        print(f"   File size: {file_size}")
         print(f"   File type: {file_type}")
         
-        # First, update user stats with increment operations
-        user_update_result = await user_data.update_one(
+        # Step 1: Ensure user exists
+        existing_user = await user_data.find_one({'_id': user_id})
+        if not existing_user:
+            print(f"   Creating new user {user_id}")
+            new_user = new_user(user_id)
+            await user_data.insert_one(new_user)
+        
+        # Step 2: Update user stats with atomic operations
+        print(f"   Updating user stats...")
+        
+        # Update total downloads and size
+        result1 = await user_data.update_one(
             {'_id': user_id},
             {
                 '$inc': {
                     'total_downloads': 1,
-                    'total_size': file_size,
-                    f'favorite_sites.{site}': 1
-                },
-                '$set': {
-                    'last_activity': datetime.now()
+                    'total_size': file_size
                 }
-            },
-            upsert=True
+            }
         )
+        print(f"   Downloads/Size update: matched={result1.matched_count}, modified={result1.modified_count}")
         
-        print(f"   User update result: matched={user_update_result.matched_count}, modified={user_update_result.modified_count}")
+        # Update favorite sites separately
+        result2 = await user_data.update_one(
+            {'_id': user_id},
+            {
+                '$inc': {f'favorite_sites.{site}': 1},
+                '$set': {'last_activity': datetime.now()}
+            }
+        )
+        print(f"   Sites update: matched={result2.matched_count}, modified={result2.modified_count}")
         
-        # Update username separately if provided (to avoid conflicts)
+        # Update username if provided (separate operation to avoid conflicts)
         if username and username.strip():
             await user_data.update_one(
                 {'_id': user_id},
                 {'$set': {'username': username.strip()}}
             )
         
-        # Update global stats
+        # Step 3: Add to download history
+        print(f"   Adding to download history...")
+        history_success = await add_download_history(user_id, url, f"Downloaded File", file_size, file_type, site)
+        print(f"   History added: {history_success}")
+        
+        # Step 4: Update global stats
+        print(f"   Updating global stats...")
         await increment_stats('total_downloads', 1)
         await update_site_stats(site)
         await update_file_type_stats(file_type)
         await update_daily_stats()
         
-        # Add to download history
-        await add_download_history(user_id, url, "Downloaded File", file_size, file_type, site)
-        
-        # Verify the update worked
+        # Step 5: Verify the update worked
         updated_user = await user_data.find_one({'_id': user_id})
         if updated_user:
-            print(f"✅ User stats after update:")
+            print(f"✅ Final user stats:")
             print(f"   Total downloads: {updated_user.get('total_downloads', 0)}")
             print(f"   Total size: {updated_user.get('total_size', 0)}")
+            print(f"   Favorite sites: {updated_user.get('favorite_sites', {})}")
+        else:
+            print(f"❌ Could not find user after update!")
+            return False
         
         return True
         

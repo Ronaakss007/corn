@@ -614,10 +614,13 @@ async def download_and_send(client, message, status_msg, url, user_id):
                     file_type = 'document'
                 
                 # Update download statistics in database
-                await update_download_stats(user_id, username, url, total_file_size, file_type)
-                
-                print(f"✅ Stats updated - User: {user_id}, Site: {site_domain}, Size: {format_bytes(total_file_size)}")
-                
+                success = await update_download_stats(user_id, username, url, file_size, file_type)
+
+                if success:
+                    print(f"✅ Stats updated successfully for user {user_id}")
+                else:
+                    print(f"❌ Failed to update stats for user {user_id}")
+
             except Exception as e:
                 print(f"❌ Error updating download stats: {e}")
         
@@ -764,7 +767,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
         last_uploaded = 0
         
         # Show initial upload message
-        initial_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴛᴏ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟ</b>\n\n"
+        initial_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ</b>\n\n"
         if part_num and total_parts:
             initial_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {part_num}/{total_parts}</b>\n\n"
         
@@ -814,7 +817,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                     if part_num and total_parts:
                         status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {part_num}/{total_parts}</b>\n\n"
                     else:
-                        status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴛᴏ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟ</b>\n\n"
+                        status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ..</b>\n\n"
                     
                     status_text += (
                         f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
@@ -1022,14 +1025,149 @@ async def update_progress(status_msg, user_id, url):
         print(f"❌ Progress update error: {e}")
 
 def download_video(url, ydl_opts):
-    """Download video using yt-dlp (runs in thread)"""
+    """Download video using yt-dlp with server-optimized options"""
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-        return True
+        import yt_dlp
+        import os
+        import platform
+        
+        # Check if we're on a server (no GUI/browsers available)
+        is_server = not os.path.exists(os.path.expanduser("~/.config")) or platform.system() == "Linux"
+        
+        if is_server:
+            print(f"🔄 Server environment detected, using optimized options...")
+            # Server-optimized options (skip cookie attempts)
+            optimized_opts = {
+                **ydl_opts,
+                # User agent rotation
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                },
+                
+                # Additional options for bot evasion
+                'extractor_args': {
+                    'youtube': {
+                        'skip': ['dash', 'hls'],
+                        'player_skip': ['js'],
+                    },
+                    'instagram': {
+                        'api_version': 'v1'
+                    }
+                },
+                
+                # Retry options
+                'retries': 3,
+                'fragment_retries': 3,
+                'retry_sleep_functions': {'http': lambda n: min(4 ** n, 60)},
+                
+                # Format selection with fallbacks
+                'format': 'best[height<=720]/best[height<=480]/best/worst',
+                
+                # Additional options
+                'no_check_certificate': True,
+                'ignoreerrors': False,
+                'extract_flat': False,
+            }
+            
+            try:
+                with yt_dlp.YoutubeDL(optimized_opts) as ydl:
+                    ydl.download([url])
+                    print(f"✅ Download successful with server-optimized options")
+                    return True
+            except Exception as e:
+                print(f"❌ Server-optimized download failed: {e}")
+                
+                # Final fallback with minimal options
+                print(f"🔄 Trying minimal fallback...")
+                minimal_opts = {
+                    **ydl_opts,
+                    'format': 'worst/best',
+                    'no_check_certificate': True,
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+                    }
+                }
+                
+                try:
+                    with yt_dlp.YoutubeDL(minimal_opts) as ydl_minimal:
+                        ydl_minimal.download([url])
+                        print(f"✅ Download successful with minimal options")
+                        return True
+                except Exception as e2:
+                    print(f"❌ All server download attempts failed: {e2}")
+                    return False
+        
+        else:
+            # Desktop environment - try cookie-based approach
+            print(f"🔄 Desktop environment detected, trying cookie-based download...")
+            
+            # Enhanced yt-dlp options with cookie support
+            enhanced_opts = {
+                **ydl_opts,
+                # Cookie options (try multiple browsers)
+                'cookiesfrombrowser': ('chrome', None, None, None),
+                
+                # User agent rotation
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                },
+                
+                # Additional options for bot evasion
+                'extractor_args': {
+                    'youtube': {
+                        'skip': ['dash', 'hls'],
+                        'player_skip': ['js'],
+                    }
+                },
+                
+                # Retry options
+                'retries': 3,
+                'fragment_retries': 3,
+                'retry_sleep_functions': {'http': lambda n: min(4 ** n, 60)},
+                
+                # Format selection with fallbacks
+                'format': 'best[height<=720]/best[height<=480]/best',
+                
+                # Additional options
+                'no_check_certificate': True,
+                'ignoreerrors': False,
+                'extract_flat': False,
+            }
+            
+            try:
+                with yt_dlp.YoutubeDL(enhanced_opts) as ydl:
+                    ydl.download([url])
+                    print(f"✅ Download successful with enhanced options")
+                    return True
+            except Exception as e:
+                print(f"❌ Enhanced download failed: {e}")
+                
+                # Fallback without cookies
+                print(f"🔄 Trying fallback without cookies...")
+                fallback_opts = {
+                    **ydl_opts,
+                    'format': 'worst/best',
+                    'http_headers': enhanced_opts['http_headers'],
+                    'no_check_certificate': True,
+                    'extractor_args': {
+                        'youtube': {'skip': ['dash']},
+                        'instagram': {'api_version': 'v1'}
+                    }
+                }
+                
+                try:
+                    with yt_dlp.YoutubeDL(fallback_opts) as ydl_fallback:
+                        ydl_fallback.download([url])
+                        print(f"✅ Download successful with fallback options")
+                        return True
+                except Exception as e2:
+                    print(f"❌ All download attempts failed: {e2}")
+                    return False
+                        
     except Exception as e:
-        print(f"❌ Download error: {e}")
+        print(f"❌ Critical download error: {e}")
         return False
+
 
 def cleanup_files(directory):
     """Clean up downloaded files"""
@@ -1228,53 +1366,72 @@ async def get_user_download_history(user_id: int, limit: int = 10):
 
 @Client.on_message(filters.command("mystats") & filters.private)
 async def mystats_command(client: Client, message: Message):
-    """Show user's personal statistics"""
+    """Show user's personal statistics - FIXED VERSION"""
     try:
         user_id = message.from_user.id
         username = message.from_user.first_name or message.from_user.username or "Unknown"
         
-        # Just get user data - no registration needed
+        # Register/update user
+        await register_new_user(user_id, username, message.from_user.first_name or "")
+        
+        # Get user data from database
         user = await get_user(user_id)
-        user_rank = await get_user_rank(user_id)
         
-        # Get user's download history
-        history = await get_user_download_history(user_id, 5)
+        # Get user's download history to verify data
+        history = await get_user_download_history(user_id, 100)
+        history_count = len(history) if history else 0
         
-        # Format file size helper
-        def format_size(size_bytes):
-            if size_bytes == 0:
-                return "0 B"
-            size_names = ["B", "KB", "MB", "GB", "TB"]
-            import math
-            i = int(math.floor(math.log(size_bytes, 1024)))
-            p = math.pow(1024, i)
-            s = round(size_bytes / p, 2)
-            return f"{s} {size_names[i]}"
-        
-        mystats_text = f"<b>📊 ʏᴏᴜʀ sᴛᴀᴛɪsᴛɪᴄs</b>\n\n"
-        mystats_text += f"<b>👤 ɴᴀᴍᴇ:</b> {username}\n"
-        mystats_text += f"<b>🆔 ᴜsᴇʀ ɪᴅ:</b> <code>{user_id}</code>\n"
-        mystats_text += f"<b>📥 ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {user.get('total_downloads', 0):,}\n"
-        mystats_text += f"<b>💾 ᴛᴏᴛᴀʟ sɪᴢᴇ:</b> {format_size(user.get('total_size', 0))}\n"
-        mystats_text += f"<b>🏆 ʀᴀɴᴋ:</b> #{user_rank}\n"
-        mystats_text += f"<b>📅 ᴊᴏɪɴᴇᴅ:</b> {user.get('join_date', datetime.now()).strftime('%Y-%m-%d')}\n\n"
-        
-        # Show favorite sites
-        favorite_sites = user.get('favorite_sites', {})
-        if favorite_sites:
-            mystats_text += "<b>🌐 ғᴀᴠᴏʀɪᴛᴇ sɪᴛᴇs:</b>\n"
-            top_sites = sorted(favorite_sites.items(), key=lambda x: x[1], reverse=True)[:3]
-            for site, count in top_sites:
-                mystats_text += f"• {site}: {count:,}\n"
-            mystats_text += "\n"
-        
-        # Show recent downloads
-        if history:
-            mystats_text += "<b>📋 ʀᴇᴄᴇɴᴛ ᴅᴏᴡɴʟᴏᴀᴅs:</b>\n"
-            for item in history[:3]:
-                date = item.get('download_time', datetime.now()).strftime('%m-%d')
-                site = item.get('site', 'Unknown')
-                mystats_text += f"• {date} - {site}\n"
+        # Check if stats need to be recalculated
+        db_downloads = user.get('total_downloads', 0)
+        if db_downloads == 0 and history_count > 0:
+            # Stats are out of sync, show warning
+            mystats_text = (
+                f"<b>📊 ʏᴏᴜʀ sᴛᴀᴛɪsᴛɪᴄs</b>\n\n"
+                f"<b>👤 ɴᴀᴍᴇ:</b> {username}\n"
+                f"<b>🆔 ᴜsᴇʀ ɪᴅ:</b> <code>{user_id}</code>\n\n"
+                f"⚠️ <b>sᴛᴀᴛs ᴏᴜᴛ ᴏғ sʏɴᴄ!</b>\n"
+                f"📋 <b>ʜɪsᴛᴏʀʏ ʀᴇᴄᴏʀᴅs:</b> {history_count}\n"
+                f"📊 <b>ᴅᴀᴛᴀʙᴀsᴇ sᴛᴀᴛs:</b> {db_downloads}\n\n"
+                f"💡 <b>ᴜsᴇ /fixstats ᴛᴏ ʀᴇᴘᴀɪʀ!</b>"
+            )
+        else:
+            # Normal stats display
+            user_rank = await get_user_rank(user_id)
+            
+            def format_size(size_bytes):
+                if size_bytes == 0:
+                    return "0 B"
+                size_names = ["B", "KB", "MB", "GB", "TB"]
+                import math
+                i = int(math.floor(math.log(size_bytes, 1024)))
+                p = math.pow(1024, i)
+                s = round(size_bytes / p, 2)
+                return f"{s} {size_names[i]}"
+            
+            mystats_text = f"<b>📊 ʏᴏᴜʀ sᴛᴀᴛɪsᴛɪᴄs</b>\n\n"
+            mystats_text += f"<b>👤 ɴᴀᴍᴇ:</b> {username}\n"
+            mystats_text += f"<b>🆔 ᴜsᴇʀ ɪᴅ:</b> <code>{user_id}</code>\n"
+            mystats_text += f"<b>📥 ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {user.get('total_downloads', 0):,}\n"
+            mystats_text += f"<b>💾 ᴛᴏᴛᴀʟ sɪᴢᴇ:</b> {format_size(user.get('total_size', 0))}\n"
+            mystats_text += f"<b>🏆 ʀᴀɴᴋ:</b> #{user_rank}\n"
+            mystats_text += f"<b>📅 ᴊᴏɪɴᴇᴅ:</b> {user.get('join_date', datetime.now()).strftime('%Y-%m-%d')}\n\n"
+            
+            # Show favorite sites
+            favorite_sites = user.get('favorite_sites', {})
+            if favorite_sites:
+                mystats_text += "<b>🌐 ғᴀᴠᴏʀɪᴛᴇ sɪᴛᴇs:</b>\n"
+                top_sites = sorted(favorite_sites.items(), key=lambda x: x[1], reverse=True)[:3]
+                for site, count in top_sites:
+                    mystats_text += f"• {site}: {count:,}\n"
+                mystats_text += "\n"
+            
+            # Show recent downloads
+            if history:
+                mystats_text += "<b>📋 ʀᴇᴄᴇɴᴛ ᴅᴏᴡɴʟᴏᴀᴅs:</b>\n"
+                for item in history[:3]:
+                    date = item.get('download_time', datetime.now()).strftime('%m-%d')
+                    site = item.get('site', 'Unknown')
+                    mystats_text += f"• {date} - {site}\n"
         
         await message.reply_text(mystats_text, parse_mode=ParseMode.HTML)
         
@@ -1284,6 +1441,7 @@ async def mystats_command(client: Client, message: Message):
             "<b>❌ ᴇʀʀᴏʀ ʟᴏᴀᴅɪɴɢ ʏᴏᴜʀ sᴛᴀᴛɪsᴛɪᴄs</b>",
             parse_mode=ParseMode.HTML
         )
+
 
 
 @Client.on_message(filters.command("history") & filters.private)

@@ -490,18 +490,24 @@ async def ping_command(client: Client, message: Message):
     except Exception as e:
         await message.reply_text("❌ <b>ᴇʀʀᴏʀ</b>", parse_mode=ParseMode.HTML)
 
-
 @Client.on_message(filters.command("fixstats") & filters.private)
 async def fix_stats_command(client: Client, message: Message):
-    """Fix user stats by recalculating from download history"""
+    """Recalculate user stats from download history"""
     try:
         user_id = message.from_user.id
+        username = message.from_user.first_name or message.from_user.username or "Unknown"
         
-        # Get user's download history
-        history = await get_user_download_history(user_id, 1000)  # Get all history
+        await message.reply_text("🔄 <b>ʀᴇᴄᴀʟᴄᴜʟᴀᴛɪɴɢ ʏᴏᴜʀ sᴛᴀᴛs...</b>", parse_mode=ParseMode.HTML)
+        
+        # Get all download history for this user
+        history = await get_user_download_history(user_id, 1000)  # Get more records
         
         if not history:
-            await message.reply_text("❌ <b>ɴᴏ ᴅᴏᴡɴʟᴏᴀᴅ ʜɪsᴛᴏʀʏ ғᴏᴜɴᴅ</b>", parse_mode=ParseMode.HTML)
+            await message.reply_text(
+                "❌ <b>ɴᴏ ᴅᴏᴡɴʟᴏᴀᴅ ʜɪsᴛᴏʀʏ ғᴏᴜɴᴅ!</b>\n\n"
+                "ᴛʀʏ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ sᴏᴍᴇᴛʜɪɴɢ ғɪʀsᴛ.",
+                parse_mode=ParseMode.HTML
+            )
             return
         
         # Calculate totals from history
@@ -512,20 +518,36 @@ async def fix_stats_command(client: Client, message: Message):
         favorite_sites = {}
         for item in history:
             site = item.get('site', 'unknown')
-            favorite_sites[site] = favorite_sites.get(site, 0) + 1
+            if site in favorite_sites:
+                favorite_sites[site] += 1
+            else:
+                favorite_sites[site] = 1
         
-        # Update user with calculated stats
-        await user_data.update_one(
+        print(f"🔄 Recalculated stats for user {user_id}:")
+        print(f"   Total downloads: {total_downloads}")
+        print(f"   Total size: {total_size}")
+        print(f"   Favorite sites: {favorite_sites}")
+        
+        # Update user document with recalculated stats
+        from database import user_data
+        result = await user_data.update_one(
             {'_id': user_id},
             {
                 '$set': {
                     'total_downloads': total_downloads,
                     'total_size': total_size,
                     'favorite_sites': favorite_sites,
+                    'username': username,
                     'last_activity': datetime.now()
                 }
-            }
+            },
+            upsert=True
         )
+        
+        print(f"✅ User update result: matched={result.matched_count}, modified={result.modified_count}")
+        
+        # Verify the update
+        updated_user = await get_user(user_id)
         
         def format_size(size_bytes):
             if size_bytes == 0:
@@ -537,17 +559,62 @@ async def fix_stats_command(client: Client, message: Message):
             s = round(size_bytes / p, 2)
             return f"{s} {size_names[i]}"
         
-        await message.reply_text(
-            f"✅ <b>sᴛᴀᴛs ғɪxᴇᴅ!</b>\n\n"
-            f"📥 <b>ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {total_downloads:,}\n"
-            f"💾 <b>ᴛᴏᴛᴀʟ sɪᴢᴇ:</b> {format_size(total_size)}\n"
-            f"🌐 <b>sɪᴛᴇs:</b> {len(favorite_sites)}",
-            parse_mode=ParseMode.HTML
+        success_text = (
+            "✅ <b>sᴛᴀᴛs ғɪxᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!</b>\n\n"
+            f"📥 <b>ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {updated_user.get('total_downloads', 0)}\n"
+            f"💾 <b>ᴛᴏᴛᴀʟ sɪᴢᴇ:</b> {format_size(updated_user.get('total_size', 0))}\n"
+            f"🌐 <b>sɪᴛᴇs ᴛʀᴀᴄᴋᴇᴅ:</b> {len(updated_user.get('favorite_sites', {}))}\n\n"
+            f"<b>ʀᴇᴄᴀʟᴄᴜʟᴀᴛᴇᴅ ғʀᴏᴍ {len(history)} ʜɪsᴛᴏʀʏ ʀᴇᴄᴏʀᴅs</b>"
         )
+        
+        await message.reply_text(success_text, parse_mode=ParseMode.HTML)
         
     except Exception as e:
         print(f"❌ Error fixing stats: {e}")
-        await message.reply_text("❌ <b>ᴇʀʀᴏʀ ғɪxɪɴɢ sᴛᴀᴛs</b>", parse_mode=ParseMode.HTML)
+        import traceback
+        traceback.print_exc()
+        await message.reply_text(
+            f"❌ <b>ᴇʀʀᴏʀ ғɪxɪɴɢ sᴛᴀᴛs:</b> {str(e)}",
+            parse_mode=ParseMode.HTML
+        )
+
+@Client.on_message(filters.command("debuguser") & filters.private)
+async def debug_user_command(client: Client, message: Message):
+    """Debug user data in database"""
+    try:
+        user_id = message.from_user.id
+        
+        # Get raw user data from database
+        from database import user_data
+        user = await user_data.find_one({'_id': user_id})
+        
+        if not user:
+            await message.reply_text("❌ <b>ᴜsᴇʀ ɴᴏᴛ ғᴏᴜɴᴅ ɪɴ ᴅᴀᴛᴀʙᴀsᴇ!</b>", parse_mode=ParseMode.HTML)
+            return
+        
+        # Get download history count
+        history = await get_user_download_history(user_id, 1000)
+        history_count = len(history) if history else 0
+        
+        debug_text = (
+            f"<b>🔍 ᴅᴇʙᴜɢ ɪɴғᴏ ғᴏʀ ᴜsᴇʀ {user_id}</b>\n\n"
+            f"<b>📊 ᴅᴀᴛᴀʙᴀsᴇ ᴠᴀʟᴜᴇs:</b>\n"
+            f"• total_downloads: {user.get('total_downloads', 'NOT SET')}\n"
+            f"• total_size: {user.get('total_size', 'NOT SET')}\n"
+            f"• favorite_sites: {user.get('favorite_sites', 'NOT SET')}\n"
+            f"• username: {user.get('username', 'NOT SET')}\n"
+            f"• join_date: {user.get('join_date', 'NOT SET')}\n"
+            f"• last_activity: {user.get('last_activity', 'NOT SET')}\n\n"
+            f"<b>📋 ʜɪsᴛᴏʀʏ ʀᴇᴄᴏʀᴅs:</b> {history_count}\n\n"
+            f"<b>🔧 ʀᴀᴡ ᴅᴀᴛᴀ:</b>\n"
+            f"<code>{str(user)[:500]}...</code>"
+        )
+        
+        await message.reply_text(debug_text, parse_mode=ParseMode.HTML)
+        
+    except Exception as e:
+        print(f"❌ Error in debug user: {e}")
+        await message.reply_text(f"❌ <b>ᴇʀʀᴏʀ:</b> {str(e)}", parse_mode=ParseMode.HTML)
 
 
 @Client.on_message(filters.command("clearrequests") & filters.private)
