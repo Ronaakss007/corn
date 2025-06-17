@@ -731,15 +731,15 @@ async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_ms
             return uploaded_messages[0] if uploaded_messages else None
         else:
             # Show initial upload message for single files
-            await status_msg.edit_text(
-                f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ </b>\n\n"
-                f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
-                f"<b>📊 ᴘʀᴏɢʀᴇss:</b> 0.0%\n"
-                f"<b>⚡ sᴘᴇᴇᴅ:</b> ᴄᴀʟᴄᴜʟᴀᴛɪɴɢ...\n"
-                f"<b>⏳ sᴛᴀᴛᴜs:</b> sᴛᴀʀᴛɪɴɢ ᴜᴘʟᴏᴀᴅ...",
-                parse_mode=ParseMode.HTML
-            )
+            # await status_msg.edit_text(
+            #     f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ </b>\n\n"
+            #     f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+            #     f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
+            #     f"<b>📊 ᴘʀᴏɢʀᴇss:</b> 0.0%\n"
+            #     f"<b>⚡ sᴘᴇᴇᴅ:</b> ᴄᴀʟᴄᴜʟᴀᴛɪɴɢ...\n"
+            #     f"<b>⏳ sᴛᴀᴛᴜs:</b> sᴛᴀʀᴛɪɴɢ ᴜᴘʟᴏᴀᴅ...",
+            #     parse_mode=ParseMode.HTML
+            # )
             
             # Upload single file (NO KEYBOARD - dump channel only)
             return await upload_single_file(upload_client, file_path, dump_id, progress_tracker, status_msg)
@@ -758,7 +758,6 @@ async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_ms
 async def upload_single_file(upload_client, file_path, dump_id, progress_tracker, status_msg, part_num=None, total_parts=None):
     """Upload a single file with real-time progress tracking and speed display"""
     try:
-        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         import time
         
         file_size = os.path.getsize(file_path)
@@ -768,6 +767,21 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
         last_update = 0
         upload_start_time = time.time()
         last_uploaded = 0
+        
+        # Show initial upload message
+        initial_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴛᴏ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟ</b>\n\n"
+        if part_num and total_parts:
+            initial_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {part_num}/{total_parts}</b>\n\n"
+        
+        initial_text += (
+            f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+            f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
+            f"<b>📊 ᴘʀᴏɢʀᴇss:</b> 0.0%\n"
+            f"<b>⚡ sᴘᴇᴇᴅ:</b> ᴄᴀʟᴄᴜʟᴀᴛɪɴɢ...\n"
+            f"<b>⏳ sᴛᴀᴛᴜs:</b> sᴛᴀʀᴛɪɴɢ ᴜᴘʟᴏᴀᴅ..."
+        )
+        
+        await status_msg.edit_text(initial_text, parse_mode=ParseMode.HTML)
         
         # Real-time progress callback with speed calculation
         def upload_progress(current, total):
@@ -815,21 +829,15 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                     f"<b>⏱️ ᴇᴛᴀ:</b> {format_time(eta)}"
                 )
                 
-                # Update status message safely - FIX: Don't create task, just try to update
+                # Update status message safely
                 try:
-                    # Use a simple approach - schedule the update but don't wait
                     loop = asyncio.get_event_loop()
                     loop.create_task(safe_edit_message(status_msg, status_text))
                 except Exception:
-                    # If we can't even create the task, just skip this update
                     pass
                 
-            except Exception as e:
-                # Remove the print statement that was causing issues
+            except Exception:
                 pass
-        
-        # Rest of the function remains the same...
-        # Create caption with metadata
         metadata = progress_tracker.metadata
         if part_num and total_parts:
             caption = f"<b>📁 {file_name}</b>\n<b>📦 Part {part_num}/{total_parts} | {format_bytes(file_size)}</b>\n\n"
