@@ -723,3 +723,100 @@ async def clear_requests_command(client: Client, message: Message):
     except Exception as e:
         print(f"❌ Error in clear requests command: {e}")
         await message.reply_text("❌ <b>ᴇʀʀᴏʀ ᴄʟᴇᴀʀɪɴɢ ʀᴇǫᴜᴇsᴛs!</b>", parse_mode=ParseMode.HTML)
+
+
+@Client.on_message(filters.command("speedtest") & filters.private)
+async def speed_test_command(client: Client, message: Message):
+    """Test download speeds and connectivity"""
+    try:
+        user_id = message.from_user.id
+        
+        # Check if user is admin (optional)
+        if user_id not in [7560922302]:  # Replace with your admin ID
+            await message.reply_text("❌ <b>ᴀᴅᴍɪɴ ᴏɴʟʏ ᴄᴏᴍᴍᴀɴᴅ!</b>", parse_mode=ParseMode.HTML)
+            return
+        
+        # Use real, working test URLs
+        test_sites = [
+            ("FreePornVideos", "https://www.freepornvideos.xxx/videos/93803970/sneaky-vacation-sex-they-both-wanted-my-cock-karina-valentina-debut/"),  # Real video
+            ("Xvideos", "https://www.xvideos2.com/video.otithuof97b/the_cum_is_flowing_and_flooooowing_body_shaking_squirting_orgasms_"),  # Will test connectivity
+            ("Pornhub", "https://www.pornhub.org/view_video.php?viewkey=68122671c5d50"),
+            ("General HTTP", "https://httpbin.org/get"),  # Simple HTTP test
+        ]
+        
+        speed_results = []
+        
+        status_msg = await message.reply_text("🔄 <b>ᴛᴇsᴛɪɴɢ ᴄᴏɴɴᴇᴄᴛɪᴠɪᴛʏ...</b>", parse_mode=ParseMode.HTML)
+        
+        for site_name, test_url in test_sites:
+            try:
+                await status_msg.edit_text(
+                    f"🔄 <b>ᴛᴇsᴛɪɴɢ {site_name}...</b>",
+                    parse_mode=ParseMode.HTML
+                )
+                
+                import time
+                import requests
+                
+                start_time = time.time()
+                
+                # Simple HTTP connectivity test
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+                
+                response = requests.get(test_url, headers=headers, timeout=10, allow_redirects=True)
+                
+                end_time = time.time()
+                response_time = (end_time - start_time) * 1000  # Convert to ms
+                
+                if response.status_code == 200:
+                    speed_results.append(f"✅ {site_name}: {response_time:.0f}ms")
+                else:
+                    speed_results.append(f"⚠️ {site_name}: {response.status_code} ({response_time:.0f}ms)")
+                
+            except requests.exceptions.Timeout:
+                speed_results.append(f"⏱️ {site_name}: Timeout")
+            except requests.exceptions.ConnectionError:
+                speed_results.append(f"❌ {site_name}: Connection blocked")
+            except Exception as e:
+                speed_results.append(f"❌ {site_name}: Error")
+                print(f"Speed test failed for {site_name}: {e}")
+        
+        # Test actual download speed with a small file
+        try:
+            await status_msg.edit_text("🔄 <b>ᴛᴇsᴛɪɴɢ ᴅᴏᴡɴʟᴏᴀᴅ sᴘᴇᴇᴅ...</b>", parse_mode=ParseMode.HTML)
+            
+            import time
+            start_time = time.time()
+            
+            # Download a small test file
+            test_file_url = "https://httpbin.org/bytes/1048576"  # 1MB test file
+            response = requests.get(test_file_url, headers=headers, timeout=30)
+            
+            end_time = time.time()
+            download_time = end_time - start_time
+            file_size_mb = len(response.content) / (1024 * 1024)
+            speed_mbps = (file_size_mb * 8) / download_time  # Convert to Mbps
+            
+            speed_results.append(f"📊 Download Speed: {speed_mbps:.1f} Mbps")
+            
+        except Exception as e:
+            speed_results.append(f"📊 Download Speed: Test failed")
+            print(f"Download speed test failed: {e}")
+        
+        result_text = (
+            "<b>📊 ᴄᴏɴɴᴇᴄᴛɪᴠɪᴛʏ ᴛᴇsᴛ ʀᴇsᴜʟᴛs</b>\n\n" +
+            "\n".join(speed_results) +
+            "\n\n<b>💡 ʟᴇɢᴇɴᴅ:</b>\n"
+            "✅ = Working\n"
+            "⚠️ = Accessible but issues\n"
+            "❌ = Blocked/Failed\n"
+            "⏱️ = Timeout"
+        )
+        
+        await status_msg.edit_text(result_text, parse_mode=ParseMode.HTML)
+        
+    except Exception as e:
+        print(f"❌ Error in speed test: {e}")
+        await message.reply_text("❌ <b>sᴘᴇᴇᴅ ᴛᴇsᴛ ғᴀɪʟᴇᴅ!</b>", parse_mode=ParseMode.HTML)

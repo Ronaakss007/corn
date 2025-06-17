@@ -1025,144 +1025,120 @@ async def update_progress(status_msg, user_id, url):
         print(f"❌ Progress update error: {e}")
 
 def download_video(url, ydl_opts):
-    """Download video using yt-dlp with server-optimized options"""
+    """Download video using yt-dlp with speed optimizations"""
     try:
         import yt_dlp
         import os
         import platform
+        from urllib.parse import urlparse
         
-        # Check if we're on a server (no GUI/browsers available)
-        is_server = not os.path.exists(os.path.expanduser("~/.config")) or platform.system() == "Linux"
+        domain = urlparse(url).netloc.lower()
         
-        if is_server:
-            print(f"🔄 Server environment detected, using optimized options...")
-            # Server-optimized options (skip cookie attempts)
-            optimized_opts = {
-                **ydl_opts,
-                # User agent rotation
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                },
-                
-                # Additional options for bot evasion
+        # Speed-optimized options
+        speed_opts = {
+            **ydl_opts,
+            
+            # Connection optimization
+            'concurrent_fragment_downloads': 4,  # Download 4 fragments simultaneously
+            'retries': 5,
+            'fragment_retries': 5,
+            'retry_sleep_functions': {
+                'http': lambda n: min(2 ** n, 10),  # Faster retry intervals
+                'fragment': lambda n: min(2 ** n, 5)
+            },
+            
+            # Buffer and timeout settings
+            'socket_timeout': 30,
+            'http_chunk_size': 1024 * 1024,  # 1MB chunks
+            
+            # Headers for better speed
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            },
+            
+            # Disable unnecessary features for speed
+            'writesubtitles': False,
+            'writeautomaticsub': False,
+            'writethumbnail': False,
+            'writeinfojson': False,
+            'no_check_certificate': True,
+            'prefer_insecure': True,  # Use HTTP when possible for speed
+        }
+        
+        # Site-specific speed optimizations
+        if 'youtube' in domain or 'youtu.be' in domain:
+            speed_opts.update({
+                'format': 'best[height<=720][protocol^=https]/best[height<=480]/best',
                 'extractor_args': {
                     'youtube': {
-                        'skip': ['dash', 'hls'],
+                        'skip': ['dash'],  # Skip DASH for faster downloads
                         'player_skip': ['js'],
-                    },
-                    'instagram': {
-                        'api_version': 'v1'
-                    }
-                },
-                
-                # Retry options
-                'retries': 3,
-                'fragment_retries': 3,
-                'retry_sleep_functions': {'http': lambda n: min(4 ** n, 60)},
-                
-                # Format selection with fallbacks
-                'format': 'best[height<=720]/best[height<=480]/best/worst',
-                
-                # Additional options
-                'no_check_certificate': True,
-                'ignoreerrors': False,
-                'extract_flat': False,
-            }
-            
-            try:
-                with yt_dlp.YoutubeDL(optimized_opts) as ydl:
-                    ydl.download([url])
-                    print(f"✅ Download successful with server-optimized options")
-                    return True
-            except Exception as e:
-                print(f"❌ Server-optimized download failed: {e}")
-                
-                # Final fallback with minimal options
-                print(f"🔄 Trying minimal fallback...")
-                minimal_opts = {
-                    **ydl_opts,
-                    'format': 'worst/best',
-                    'no_check_certificate': True,
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
                     }
                 }
-                
-                try:
-                    with yt_dlp.YoutubeDL(minimal_opts) as ydl_minimal:
-                        ydl_minimal.download([url])
-                        print(f"✅ Download successful with minimal options")
-                        return True
-                except Exception as e2:
-                    print(f"❌ All server download attempts failed: {e2}")
-                    return False
-        
+            })
+            
+        elif 'instagram' in domain:
+            speed_opts.update({
+                'format': 'best/worst',
+                'concurrent_fragment_downloads': 2,  # Instagram is more restrictive
+            })
+            
+        elif any(adult_site in domain for adult_site in ['pornhub', 'xvideos', 'xnxx', 'xhamster']):
+            speed_opts.update({
+                'format': 'best[height<=720]/best',
+                'concurrent_fragment_downloads': 6,  # Adult sites often allow more connections
+                'http_headers': {
+                    **speed_opts['http_headers'],
+                    'Referer': f'https://{domain}/',
+                }
+            })
+            
         else:
-            # Desktop environment - try cookie-based approach
-            print(f"🔄 Desktop environment detected, trying cookie-based download...")
+            # Generic sites
+            speed_opts.update({
+                'format': 'best/worst',
+                'concurrent_fragment_downloads': 3,
+            })
+        
+        print(f"🚀 Starting optimized download from {domain}...")
+        print(f"   Concurrent fragments: {speed_opts.get('concurrent_fragment_downloads', 1)}")
+        print(f"   Chunk size: {speed_opts.get('http_chunk_size', 'default')}")
+        
+        try:
+            with yt_dlp.YoutubeDL(speed_opts) as ydl:
+                ydl.download([url])
+                print(f"✅ High-speed download successful")
+                return True
+                
+        except Exception as e:
+            print(f"❌ High-speed download failed: {e}")
             
-            # Enhanced yt-dlp options with cookie support
-            enhanced_opts = {
+            # Fallback with conservative settings
+            print(f"🔄 Trying conservative fallback...")
+            conservative_opts = {
                 **ydl_opts,
-                # Cookie options (try multiple browsers)
-                'cookiesfrombrowser': ('chrome', None, None, None),
-                
-                # User agent rotation
+                'format': 'worst/best',
+                'concurrent_fragment_downloads': 1,
                 'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
                 },
-                
-                # Additional options for bot evasion
-                'extractor_args': {
-                    'youtube': {
-                        'skip': ['dash', 'hls'],
-                        'player_skip': ['js'],
-                    }
-                },
-                
-                # Retry options
+                'socket_timeout': 60,
                 'retries': 3,
-                'fragment_retries': 3,
-                'retry_sleep_functions': {'http': lambda n: min(4 ** n, 60)},
-                
-                # Format selection with fallbacks
-                'format': 'best[height<=720]/best[height<=480]/best',
-                
-                # Additional options
-                'no_check_certificate': True,
-                'ignoreerrors': False,
-                'extract_flat': False,
             }
             
             try:
-                with yt_dlp.YoutubeDL(enhanced_opts) as ydl:
-                    ydl.download([url])
-                    print(f"✅ Download successful with enhanced options")
+                with yt_dlp.YoutubeDL(conservative_opts) as ydl_conservative:
+                    ydl_conservative.download([url])
+                    print(f"✅ Conservative download successful")
                     return True
-            except Exception as e:
-                print(f"❌ Enhanced download failed: {e}")
-                
-                # Fallback without cookies
-                print(f"🔄 Trying fallback without cookies...")
-                fallback_opts = {
-                    **ydl_opts,
-                    'format': 'worst/best',
-                    'http_headers': enhanced_opts['http_headers'],
-                    'no_check_certificate': True,
-                    'extractor_args': {
-                        'youtube': {'skip': ['dash']},
-                        'instagram': {'api_version': 'v1'}
-                    }
-                }
-                
-                try:
-                    with yt_dlp.YoutubeDL(fallback_opts) as ydl_fallback:
-                        ydl_fallback.download([url])
-                        print(f"✅ Download successful with fallback options")
-                        return True
-                except Exception as e2:
-                    print(f"❌ All download attempts failed: {e2}")
-                    return False
+            except Exception as e2:
+                print(f"❌ All download attempts failed: {e2}")
+                return False
                         
     except Exception as e:
         print(f"❌ Critical download error: {e}")
@@ -1212,7 +1188,13 @@ async def cancel_command(client: Client, message: Message):
 @Client.on_message(filters.command("stats") & filters.private)
 async def stats_command(client: Client, message: Message):
     """Handle /stats command with database integration"""
+
+    if user_id not in [7560922302]:  # Replace with your admin ID
+        await message.reply_text("❌ <b>ᴀᴅᴍɪɴ ᴏɴʟʏ ᴄᴏᴍᴍᴀɴᴅ!</b>", parse_mode=ParseMode.HTML)
+        return
+    
     try:
+        
         # Get stats from database
         stats = await get_stats()
         user_count = await get_user_count()
