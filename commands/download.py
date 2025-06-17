@@ -742,7 +742,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                 if part_num and total_parts:
                     status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {part_num}/{total_parts}</b>\n\n"
                 else:
-                    status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ</b>\n\n"
+                    status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴛᴏ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟ</b>\n\n"
                 
                 status_text += (
                     f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
@@ -755,12 +755,20 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                     f"<b>⏱️ ᴇᴛᴀ:</b> {format_time(eta)}"
                 )
                 
-                # Update status message safely
-                asyncio.create_task(safe_edit_message(status_msg, status_text))
+                # Update status message safely - FIX: Don't create task, just try to update
+                try:
+                    # Use a simple approach - schedule the update but don't wait
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(safe_edit_message(status_msg, status_text))
+                except Exception:
+                    # If we can't even create the task, just skip this update
+                    pass
                 
             except Exception as e:
-                print(f"❌ Progress update error: {e}")
+                # Remove the print statement that was causing issues
+                pass
         
+        # Rest of the function remains the same...
         # Create caption with metadata
         metadata = progress_tracker.metadata
         if part_num and total_parts:
@@ -769,16 +777,16 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
             caption = f"<b>📁 {file_name}</b>\n<b>📦 {format_bytes(file_size)}</b>\n\n"
         
         # Add metadata if available
-        # if metadata:
-        #     if metadata.get('title'):
-        #         caption += f"<b>🎬 ᴛɪᴛʟᴇ:</b> {metadata['title'][:50]}{'...' if len(metadata['title']) > 50 else ''}\n"
-        #     if metadata.get('duration'):
-        #         caption += f"<b>⏱️ ᴅᴜʀᴀᴛɪᴏɴ:</b> {metadata['duration_string']}\n"
-        #     if metadata.get('uploader'):
-        #         caption += f"<b>👤 ᴜᴘʟᴏᴀᴅᴇʀ:</b> {metadata['uploader'][:30]}{'...' if len(metadata['uploader']) > 30 else ''}\n"
-        #     caption += "\n"
+        if metadata:
+            if metadata.get('title'):
+                caption += f"<b>🎬 ᴛɪᴛʟᴇ:</b> {metadata['title'][:50]}{'...' if len(metadata['title']) > 50 else ''}\n"
+            if metadata.get('duration'):
+                caption += f"<b>⏱️ ᴅᴜʀᴀᴛɪᴏɴ:</b> {metadata['duration_string']}\n"
+            if metadata.get('uploader'):
+                caption += f"<b>👤 ᴜᴘʟᴏᴀᴅᴇʀ:</b> {metadata['uploader'][:30]}{'...' if len(metadata['uploader']) > 30 else ''}\n"
+            caption += "\n"
         
-        # caption += f"<b>🤖 ᴜᴘʟᴏᴀᴅᴇᴅ ʙʏ:</b> @{Config.BOT_USERNAME}"
+        caption += f"<b>🤖 ᴜᴘʟᴏᴀᴅᴇᴅ ʙʏ:</b> @{Config.BOT_USERNAME}"
         
         # Create inline keyboard with channel button
         keyboard = InlineKeyboardMarkup([
@@ -816,7 +824,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                         duration=int(metadata.get('duration', 0)) if metadata else 0,
                         width=width,
                         height=height,
-                        progress=upload_progress,  # Real-time progress callback
+                        progress=upload_progress,
                         parse_mode=ParseMode.HTML
                     )
                 elif file_path.lower().endswith(('.mp3', '.m4a', '.wav', '.flac', '.ogg')):
@@ -830,7 +838,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                         performer=metadata.get('uploader', 'Unknown') if metadata else 'Unknown',
                         title=metadata.get('title', file_name) if metadata else file_name,
                         thumb=thumbnail_path,
-                        progress=upload_progress,  # Real-time progress callback
+                        progress=upload_progress,
                         parse_mode=ParseMode.HTML
                     )
                 else:
@@ -841,7 +849,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                         caption=caption,
                         reply_markup=keyboard,
                         thumb=thumbnail_path,
-                        progress=upload_progress,  # Real-time progress callback
+                        progress=upload_progress,
                         parse_mode=ParseMode.HTML
                     )
                 break  # Success, exit retry loop
@@ -862,13 +870,6 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
             except Exception as e:
                 if attempt < max_retries - 1:
                     print(f"❌ Upload attempt {attempt + 1} failed: {e}")
-                    await status_msg.edit_text(
-                        f"<b>⚠️ ᴜᴘʟᴏᴀᴅ ᴀᴛᴛᴇᴍᴘᴛ {attempt + 1} ғᴀɪʟᴇᴅ</b>\n\n"
-                        f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                        f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(e)[:100]}</code>\n"
-                        f"<b>🔄 ʀᴇᴛʀʏɪɴɢ ɪɴ 2 sᴇᴄᴏɴᴅs...</b>",
-                        parse_mode=ParseMode.HTML
-                    )
                     await asyncio.sleep(2)
                 else:
                     raise e
@@ -912,10 +913,8 @@ async def safe_edit_message(message, text):
     try:
         await message.edit_text(text, parse_mode=ParseMode.HTML)
     except Exception:
-        # Ignore all edit errors (message not modified, too many requests, etc.)
+        # Silently ignore all edit errors
         pass
-
-
 
 async def update_progress(status_msg, user_id, url):
     """Update progress message every few seconds"""
