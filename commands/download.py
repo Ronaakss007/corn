@@ -82,354 +82,358 @@ async def register_new_user(user_id, username, first_name):
         # Just return the user data without updating
         return await get_user(user_id)
 
-
 # Get dump channels from config (fixed)
 DUMP_CHAT_IDS = Config.DUMP_CHAT_IDS
 
-# Global variables to track downloads
-active_downloads = {}
-
-# Stats file path
-STATS_FILE = "bot_stats.json"
+# Global variables to track downloads - UPDATED FOR MULTIPLE DOWNLOADS
+active_downloads = defaultdict(list)  # Changed to list to store multiple downloads per user
+download_counter = 0  # Global counter for unique download IDs
 
 class ProgressTracker:
-    def __init__(self):
-        self.start_time = time.time()
+    def __init__(self, download_id, url):
+        self.download_id = download_id
+        self.url = url
         self.downloaded = 0
         self.total_size = 0
         self.speed = 0
         self.eta = 0
-        self.status = "sᴛᴀʀᴛɪɴɢ..."
-        self.filename = ""
-        self.metadata = {}
+        self.filename = "Unknown"
+        self.status = "ɪɴɪᴛɪᴀʟɪᴢɪɴɢ"
+        self.start_time = time.time()
+        self.last_update = 0
         self.upload_progress = 0
         self.upload_total = 0
 
-def load_stats():
-    """Load stats from file"""
-    try:
-        if os.path.exists(STATS_FILE):
-            with open(STATS_FILE, 'r') as f:
-                return json.load(f)
-        return {
-            "total_downloads": 0,
-            "users": {},
-            "sites": {},
-            "daily_stats": {},
-            "file_types": {}
-        }
-    except Exception as e:
-        logging.error(f"Error loading stats: {e}")
-        return {
-            "total_downloads": 0,
-            "users": {},
-            "sites": {},
-            "daily_stats": {},
-            "file_types": {}
-        }
+def get_active_download_count(user_id):
+    """Get number of active downloads for a user"""
+    return len(active_downloads.get(user_id, []))
 
-def save_stats(stats):
-    """Save stats to file"""
-    try:
-        with open(STATS_FILE, 'w') as f:
-            json.dump(stats, f, indent=2)
-    except Exception as e:
-        logging.error(f"Error saving stats: {e}")
+def add_active_download(user_id, download_id, url):
+    """Add a new active download for user"""
+    global download_counter
+    download_counter += 1
+    
+    tracker = ProgressTracker(download_id, url)
+    active_downloads[user_id].append(tracker)
+    
+    print(f"📥 Added download {download_id} for user {user_id} (Total: {len(active_downloads[user_id])})")
+    return tracker
+
+def remove_active_download(user_id, download_id):
+    """Remove completed download from active list"""
+    if user_id in active_downloads:
+        active_downloads[user_id] = [
+            tracker for tracker in active_downloads[user_id] 
+            if tracker.download_id != download_id
+        ]
+        
+        # Clean up empty lists
+        if not active_downloads[user_id]:
+            del active_downloads[user_id]
+        
+        print(f"✅ Removed download {download_id} for user {user_id}")
+
+def get_download_tracker(user_id, download_id):
+    """Get specific download tracker"""
+    if user_id in active_downloads:
+        for tracker in active_downloads[user_id]:
+            if tracker.download_id == download_id:
+                return tracker
+    return None
 
 def format_bytes(bytes_value):
-    """Convert bytes to human readable format"""
+    """Format bytes to human readable format"""
     if bytes_value == 0:
-        return "0 ʙ"
+        return "0 B"
     
-    units = ['ʙ', 'ᴋʙ', 'ᴍʙ', 'ɢʙ', 'ᴛʙ']
-    unit_index = 0
-    
-    while bytes_value >= 1024 and unit_index < len(units) - 1:
-        bytes_value /= 1024
-        unit_index += 1
-    
-    return f"{bytes_value:.1f} {units[unit_index]}"
+    size_names = ["B", "KB", "MB", "GB", "TB"]
+    i = int(math.floor(math.log(bytes_value, 1024)))
+    p = math.pow(1024, i)
+    s = round(bytes_value / p, 2)
+    return f"{s} {size_names[i]}"
 
 def format_time(seconds):
-    """Convert seconds to human readable time format"""
+    """Format seconds to human readable time"""
     if seconds <= 0:
-        return "0s"
+        return "Unknown"
     
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
+    seconds = int(seconds % 60)
     
     if hours > 0:
-        return f"{hours}ʜ {minutes}ᴍ {secs}s"
+        return f"{hours}h {minutes}m {seconds}s"
     elif minutes > 0:
-        return f"{minutes}ᴍ {secs}s"
+        return f"{minutes}m {seconds}s"
     else:
-        return f"{secs}s"
+        return f"{seconds}s"
 
-def format_duration(seconds):
-    """Format duration from seconds to HH:MM:SS or MM:SS"""
-    if not seconds or seconds <= 0:
-        return "00:00"
-    
+def cleanup_files(directory):
+    """Clean up downloaded files"""
     try:
-        seconds = int(float(seconds))
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        secs = seconds % 60
-        
-        if hours > 0:
-            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-        else:
-            return f"{minutes:02d}:{secs:02d}"
-    except:
-        return "00:00"
+        if os.path.exists(directory):
+            for file in os.listdir(directory):
+                file_path = os.path.join(directory, file)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+                    print(f"🗑️ Cleaned up: {file}")
+            os.rmdir(directory)
+            print(f"🗑️ Cleaned up directory: {directory}")
+    except Exception as e:
+        print(f"❌ Cleanup error: {e}")
 
-def create_progress_bar(percentage):
+async def update_progress(status_msg, user_id, download_id):
+    """Update progress message for specific download"""
+    try:
+        last_edit_time = 0
+        
+        while True:
+            current_time = time.time()
+            
+            # Update every 3 seconds to avoid flood limits
+            if current_time - last_edit_time < 3:
+                await asyncio.sleep(1)
+                continue
+            
+            tracker = get_download_tracker(user_id, download_id)
+            if not tracker:
+                break
+            
+            if tracker.status == "ᴄᴏᴍᴘʟᴇᴛᴇᴅ":
+                break
+            
+            try:
+                # Calculate progress
+                if tracker.total_size > 0:
+                    progress_percent = (tracker.downloaded / tracker.total_size) * 100
+                    progress_bar = create_progress_bar(progress_percent)
+                else:
+                    progress_percent = 0
+                    progress_bar = "▱▱▱▱▱▱▱▱▱▱"
+                
+                # Format speed and ETA
+                speed_text = format_bytes(tracker.speed) + "/s" if tracker.speed > 0 else "0 B/s"
+                eta_text = format_time(tracker.eta) if tracker.eta > 0 else "Unknown"
+                
+                # Get file name (truncate if too long)
+                filename = tracker.filename
+                if len(filename) > 30:
+                    filename = filename[:27] + "..."
+                
+                # Count active downloads for this user
+                active_count = get_active_download_count(user_id)
+                
+                progress_text = (
+                    f"<b>📥 ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ... ({active_count} ᴀᴄᴛɪᴠᴇ)</b>\n\n"
+                    f"<b>📁 ғɪʟᴇ:</b> <code>{filename}</code>\n"
+                    f"<b>📊 ᴘʀᴏɢʀᴇss:</b> {progress_percent:.1f}%\n"
+                    f"{progress_bar}\n"
+                    f"<b>💾 sɪᴢᴇ:</b> {format_bytes(tracker.downloaded)} / {format_bytes(tracker.total_size)}\n"
+                    f"<b>⚡ sᴘᴇᴇᴅ:</b> {speed_text}\n"
+                    f"<b>⏱️ ᴇᴛᴀ:</b> {eta_text}\n"
+                    f"<b>🆔 ᴅᴏᴡɴʟᴏᴀᴅ:</b> #{download_id}"
+                )
+                
+                await status_msg.edit_text(progress_text, parse_mode=ParseMode.HTML)
+                last_edit_time = current_time
+                
+            except Exception as e:
+                if "message is not modified" not in str(e).lower():
+                    print(f"❌ Progress update error: {e}")
+            
+            await asyncio.sleep(2)
+            
+    except asyncio.CancelledError:
+        print(f"📊 Progress tracking cancelled for download {download_id}")
+    except Exception as e:
+        print(f"❌ Progress tracking error: {e}")
+
+def create_progress_bar(percentage, length=10):
     """Create a visual progress bar"""
-    filled = int(percentage / 10)
-    empty = 10 - filled
-    return "█" * filled + "░" * empty
+    filled = int(length * percentage / 100)
+    bar = "▰" * filled + "▱" * (length - filled)
+    return bar
 
-async def get_video_dimensions(video_path):
-    """Get video width and height using ffprobe"""
+async def upload_to_dump(client, file_path, dump_chat_id, progress_tracker, status_msg):
+    """Upload file to dump channel with progress tracking"""
     try:
-        process = await asyncio.create_subprocess_exec(
-            'ffprobe', '-v', 'error', '-select_streams', 'v:0',
-            '-show_entries', 'stream=width,height', '-of', 'csv=s=x:p=0', video_path,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
+        file_size = os.path.getsize(file_path)
+        file_name = os.path.basename(file_path)
         
-        stdout, stderr = await process.communicate()
+        print(f"📤 Uploading to dump {dump_chat_id}: {file_name}")
         
-        if process.returncode != 0:
-            logging.warning(f"ffprobe error: {stderr.decode()}")
-            return 1280, 720
+        # Upload progress callback
+        async def upload_progress(current, total):
+            try:
+                progress_tracker.upload_progress = current
+                progress_tracker.upload_total = total
+                
+                # Update status message every 3 seconds
+                current_time = time.time()
+                if hasattr(upload_progress, 'last_update'):
+                    if current_time - upload_progress.last_update < 3:
+                        return
+                upload_progress.last_update = current_time
+                
+                percent = (current / total) * 100 if total > 0 else 0
+                progress_bar = create_progress_bar(percent)
+                
+                upload_text = (
+                    f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ...</b>\n\n"
+                    f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+                    f"<b>📊 ᴘʀᴏɢʀᴇss:</b> {percent:.1f}%\n"
+                    f"{progress_bar}\n"
+                    f"<b>💾 sɪᴢᴇ:</b> {format_bytes(current)} / {format_bytes(total)}\n"
+                    f"<b>🆔 ᴅᴏᴡɴʟᴏᴀᴅ:</b> #{progress_tracker.download_id}"
+                )
+                
+                try:
+                    await status_msg.edit_text(upload_text, parse_mode=ParseMode.HTML)
+                except Exception:
+                    pass  # Ignore edit errors during upload
+                    
+            except Exception as e:
+                print(f"Upload progress error: {e}")
         
-        output = stdout.decode().strip()
-        if 'x' in output:
-            width, height = map(int, output.split('x'))
-            if width > 0 and height > 0:
-                return width, height
+        # Determine file type and upload accordingly
+        file_ext = os.path.splitext(file_name)[1].lower()
         
-        return 1280, 720
+        if file_ext in ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv']:
+            # Upload as video
+            message = await client.send_video(
+                chat_id=dump_chat_id,
+                video=file_path,
+                caption=f"📹 {file_name}\n💾 {format_bytes(file_size)}",
+                progress=upload_progress,
+                supports_streaming=True
+            )
+        elif file_ext in ['.mp3', '.m4a', '.wav', '.flac', '.ogg', '.aac']:
+            # Upload as audio
+            message = await client.send_audio(
+                chat_id=dump_chat_id,
+                audio=file_path,
+                caption=f"🎵 {file_name}\n💾 {format_bytes(file_size)}",
+                progress=upload_progress
+            )
+        else:
+            # Upload as document
+            message = await client.send_document(
+                chat_id=dump_chat_id,
+                document=file_path,
+                caption=f"📄 {file_name}\n💾 {format_bytes(file_size)}",
+                progress=upload_progress
+            )
+        
+        print(f"✅ Upload successful to dump {dump_chat_id}")
+        return message
         
     except Exception as e:
-        logging.warning(f"Error getting video dimensions: {e}")
-        return 1280, 720
+        print(f"❌ Upload failed to dump {dump_chat_id}: {e}")
+        return None
 
-async def get_video_metadata(url):
-    """Extract video metadata using yt-dlp"""
+def download_video(url, ydl_opts):
+    """Download video using yt-dlp with enhanced error handling"""
     try:
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'extract_flat': False,
-            'skip_download': True,
+        import yt_dlp
+        from urllib.parse import urlparse
+        
+        domain = urlparse(url).netloc.lower()
+        
+        # Enhanced connection options
+        connection_opts = {
+            **ydl_opts,
+            
+            # Connection resilience
+            'retries': 10,
+            'fragment_retries': 10,
+            'retry_sleep_functions': {
+                'http': lambda n: min(4 ** n, 30),
+                'fragment': lambda n: min(2 ** n, 10)
+            },
+            
+            # Timeout settings
+            'socket_timeout': 60,
+            
+            # Headers to avoid detection
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            },
+            
+            # SSL/TLS settings
+            'no_check_certificate': True,
+            'prefer_insecure': False,
+            
+            # Download optimization
+            'concurrent_fragment_downloads': 1,
+            'http_chunk_size': 512 * 1024,  # 512KB chunks
         }
         
-        loop = asyncio.get_event_loop()
-        metadata = await loop.run_in_executor(None, extract_metadata, url, ydl_opts)
-        
-        if metadata:
-            return {
-                'title': metadata.get('title', 'Unknown'),
-                'duration': metadata.get('duration', 0),
-                'duration_string': format_duration(metadata.get('duration', 0)),
-                'uploader': metadata.get('uploader', 'Unknown'),
-                'view_count': metadata.get('view_count', 0),
-                'filesize': metadata.get('filesize', 0),
-                'resolution': metadata.get('resolution', 'Unknown'),
-            }
-        return None
-        
-    except Exception as e:
-        print(f"❌ Metadata extraction error: {e}")
-        return None
-
-def extract_metadata(url, ydl_opts):
-    """Extract metadata in thread"""
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return info
-    except Exception as e:
-        print(f"❌ Extract metadata error: {e}")
-        return None
-
-async def generate_thumbnail(video_path: str, output_path: str, time_position: int = 10) -> str:
-    """Generate high-quality thumbnail with database-stored watermark settings"""
-    try:
-        # Get watermark settings from database
-        watermark_settings = await get_watermark_settings()
-        
-        if watermark_settings.get('enabled', False):
-            text = watermark_settings.get('text', Config.BOT_NAME).replace("'", "\\'")
-            position = watermark_settings.get('position', 'bottom-right')
-            size = watermark_settings.get('font_size', 32)
-            color = watermark_settings.get('color', 'white')
-            shadow_color = watermark_settings.get('shadow_color', 'black')
-            box_color = watermark_settings.get('box_color', 'black@0.0')
+        # Site-specific adjustments
+        if any(adult_site in domain for adult_site in ['pornhub', 'xvideos', 'xnxx', 'xhamster']):
+            print(f"🔞 Adult site detected: {domain}")
+            connection_opts.update({
+                'http_headers': {
+                    **connection_opts['http_headers'],
+                    'Referer': f'https://{domain}/',
+                    'Origin': f'https://{domain}',
+                },
+                'socket_timeout': 120,
+                'retries': 15,
+                'age_limit': 18,
+            })
             
-            # Position mapping
-            pos_map = {
-                'top-left': 'x=15:y=15',
-                'top-right': 'x=w-tw-15:y=15',
-                'bottom-left': 'x=15:y=h-th-15',
-                'bottom-right': 'x=w-tw-15:y=h-th-15',
-                'center': 'x=(w-tw)/2:y=(h-th)/2',
-                'top-center': 'x=(w-tw)/2:y=15',
-                'bottom-center': 'x=(w-tw)/2:y=h-th-15'
-            }
-            pos = pos_map.get(position, 'x=w-tw-15:y=h-th-15')
+        elif 'youtube' in domain:
+            connection_opts.update({
+                'format': 'best[height<=720]/best[height<=480]/worst',
+                'extractor_args': {
+                    'youtube': {
+                        'skip': ['dash'],
+                        'player_skip': ['js'],
+                    }
+                }
+            })
             
-            # Dynamic font size based on video resolution
-            dynamic_size = max(16, size)
-            
-            # Create watermark filter based on box settings
-            if box_color.endswith("@0.0") or box_color == "none":
-                # No background box, use shadow and border
-                watermark_filter = (
-                    f"scale=480:-1,"
-                    f"drawtext=text='{text}':"
-                    f"fontcolor={color}:"
-                    f"fontsize={dynamic_size}:"
-                    f"{pos}:"
-                    f"shadowcolor={shadow_color}:"
-                    f"shadowx=3:shadowy=3:"
-                    f"borderw=2:"
-                    f"bordercolor={shadow_color}"
-                )
-            else:
-                # With background box
-                watermark_filter = (
-                    f"scale=480:-1,"
-                    f"drawtext=text='{text}':"
-                    f"fontcolor={color}:"
-                    f"fontsize={dynamic_size}:"
-                    f"box=1:"
-                    f"boxcolor={box_color}:"
-                    f"boxborderw=5:"
-                    f"{pos}"
-                )
-        else:
-            # No watermark, just scale
-            watermark_filter = "scale=480:-1"
+        elif 'instagram' in domain:
+            connection_opts.update({
+                'http_headers': {
+                    **connection_opts['http_headers'],
+                    'X-Instagram-AJAX': '1',
+                    'X-Requested-With': 'XMLHttpRequest',
+                }
+            })
         
-        # Generate thumbnail using ffmpeg
-        process = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-hide_banner", "-loglevel", "panic",
-            "-ss", str(time_position),
-            "-i", video_path,
-            "-vframes", "1",
-            "-vf", watermark_filter,
-            "-q:v", "1",
-            "-pix_fmt", "yuv420p",
-            "-compression_level", "0",
-            output_path,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
-        )
+        print(f"🔄 Attempting download from {domain}...")
         
         try:
-            await asyncio.wait_for(process.communicate(), timeout=15)
-            
-            if process.returncode == 0 and os.path.exists(output_path):
-                file_size = os.path.getsize(output_path)
-                if file_size > 1024:  # At least 1KB
-                    return output_path
-                else:
-                    return None
-            else:
-                return None
+            with yt_dlp.YoutubeDL(connection_opts) as ydl:
+                ydl.download([url])
+                print(f"✅ Download successful")
+                return True
                 
-        except asyncio.TimeoutError:
-            process.kill()
-            return None
-            
+        except Exception as e:
+            print(f"❌ Download failed: {e}")
+            return False
+                        
     except Exception as e:
-        print(f"❌ Thumbnail generation failed: {e}")
-        return None
+        print(f"❌ Critical download error: {e}")
+        return False
 
-# Add this function to check admin
-def check_admin(_, __, message):
-    """Check if user is admin"""
-    return Config.is_admin(message.from_user.id)
-
-@Client.on_message(filters.private & ~filters.command([
-    "start", "help", "stats", "mystats", "leaderboard", "history", "cancel",
-    "fix_dumps", "check_dumps", "force_meet", "reset_stats", "broadcast", 
-    "watermark", "logs", "cleanup", "restart", "test"
-]))
-async def handle_url_message(client: Client, message: Message):
-    """Handle URL messages for download"""
-    try:
-        if not await check_subscription(client, message):
-            return
-        
-        if not message.text:
-            return
-            
-        url = message.text.strip()
-        
-        # Basic URL validation
-        if not re.match(r'https?://', url):
-            await message.reply_text(
-                "<b>❌ ɪɴᴠᴀʟɪᴅ ᴜʀʟ</b>\n\n"
-                "ᴘʟᴇᴀsᴇ sᴇɴᴅ ᴀ ᴠᴀʟɪᴅ ᴜʀʟ sᴛᴀʀᴛɪɴɢ ᴡɪᴛʜ http:// ᴏʀ https://",
-                parse_mode=ParseMode.HTML
-            )
-            return
-        
-        user_id = message.from_user.id
-        username = message.from_user.first_name or message.from_user.username or "Unknown"
-        first_name = message.from_user.first_name or ""
-        
-        # Register/update user in database
-        await register_new_user(user_id, username, first_name)
-        
-        # Check if user already has active download
-        if user_id in active_downloads:
-            await message.reply_text(
-                "<b>❌ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ</b>\n\n"
-                "ʏᴏᴜ ᴀʟʀᴇᴀᴅʏ ʜᴀᴠᴇ ᴀɴ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ! ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ғᴏʀ ɪᴛ ᴛᴏ ᴄᴏᴍᴘʟᴇᴛᴇ.",
-                parse_mode=ParseMode.HTML
-            )
-            return
-        
-        # Continue with existing download logic...
-        active_downloads[user_id] = ProgressTracker()
-        
-        status_msg = await message.reply_text(
-            "<b>📥 sᴛᴀʀᴛɪɴɢ ᴅᴏᴡɴʟᴏᴀᴅ</b>\n\n"
-            f"<b>🔗 ᴜʀʟ:</b> <code>{url}</code>\n\n"
-            f"<b>⏳ sᴛᴀᴛᴜs:</b> ᴘʀᴇᴘᴀʀɪɴɢ...",
-            parse_mode=ParseMode.HTML
-        )
-        
-        # Extract metadata and start download
-        metadata = await get_video_metadata(url)
-        if metadata:
-            active_downloads[user_id].metadata = metadata
-        
-        await download_and_send(client, message, status_msg, url, user_id)
-        
-    except Exception as e:
-        print(f"❌ Error in handle_url_message: {e}")
-        await message.reply_text(
-            f"<b>❌ ᴇʀʀᴏʀ</b>\n\n<code>{str(e)}</code>",
-            parse_mode=ParseMode.HTML
-        )
-        if message.from_user.id in active_downloads:
-            del active_downloads[message.from_user.id]
-
-async def download_and_send(client, message, status_msg, url, user_id):
-    """Download video and send to user with progress tracking"""
+async def download_and_send(client, message, status_msg, url, user_id, download_id):
+    """Download video and send to user with progress tracking - UPDATED FOR MULTIPLE DOWNLOADS"""
     try:
         # Create download directory
-        download_dir = f"./downloads/{user_id}/"
+        download_dir = f"./downloads/{user_id}_{download_id}/"
         os.makedirs(download_dir, exist_ok=True)
         
-        progress_tracker = active_downloads[user_id]
+        progress_tracker = get_download_tracker(user_id, download_id)
+        if not progress_tracker:
+            await status_msg.edit_text("❌ <b>ᴅᴏᴡɴʟᴏᴀᴅ ᴛʀᴀᴄᴋᴇʀ ɴᴏᴛ ғᴏᴜɴᴅ!</b>", parse_mode=ParseMode.HTML)
+            return
         
         def progress_hook(d):
             """Progress hook for yt-dlp"""
@@ -458,7 +462,7 @@ async def download_and_send(client, message, status_msg, url, user_id):
         }
         
         # Start progress update task for downloading
-        progress_task = asyncio.create_task(update_progress(status_msg, user_id, url))
+        progress_task = asyncio.create_task(update_progress(status_msg, user_id, download_id))
         
         # Download in a separate thread
         loop = asyncio.get_event_loop()
@@ -469,20 +473,21 @@ async def download_and_send(client, message, status_msg, url, user_id):
         
         if not success:
             await status_msg.edit_text(
-                "<b>❌ ᴅᴏᴡɴʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
+                f"<b>❌ ᴅᴏᴡɴʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
+                f"<b>🆔 ᴅᴏᴡɴʟᴏᴀᴅ:</b> #{download_id}\n"
                 "ᴛʜᴇ ᴠɪᴅᴇᴏ ᴄᴏᴜʟᴅ ɴᴏᴛ ʙᴇ ᴅᴏᴡɴʟᴏᴀᴅᴇᴅ.",
                 parse_mode=ParseMode.HTML
             )
             return
         
-        # STEP 2: Show download complete message
+        # Show download complete message
         await status_msg.edit_text(
-            "<b>✅ ᴅᴏᴡɴʟᴏᴀᴅ ᴄᴏᴍᴘʟᴇᴛᴇᴅ!</b>\n\n"
-            "<b>📋 ᴘʀᴇᴘᴀʀɪɴɢ ғɪʟᴇs ғᴏʀ ᴜᴘʟᴏᴀᴅ...</b>",
+            f"<b>✅ ᴅᴏᴡɴʟᴏᴀᴅ ᴄᴏᴍᴘʟᴇᴛᴇᴅ!</b>\n\n"
+            f"<b>🆔 ᴅᴏᴡɴʟᴏᴀᴅ:</b> #{download_id}\n"
+            f"<b>📋 ᴘʀᴇᴘᴀʀɪɴɢ ғɪʟᴇs ғᴏʀ ᴜᴘʟᴏᴀᴅ...</b>",
             parse_mode=ParseMode.HTML
         )
         
-        # Small delay to show the message
         await asyncio.sleep(1)
         
         # Find downloaded files
@@ -493,769 +498,370 @@ async def download_and_send(client, message, status_msg, url, user_id):
         
         if not downloaded_files:
             await status_msg.edit_text(
-                "<b>❌ ɴᴏ ғɪʟᴇs ғᴏᴜɴᴅ!</b>",
+                f"<b>❌ ɴᴏ ғɪʟᴇs ғᴏᴜɴᴅ!</b>\n\n"
+                f"<b>🆔 ᴅᴏᴡɴʟᴏᴀᴅ:</b> #{download_id}",
                 parse_mode=ParseMode.HTML
             )
             return
         
         # Process each downloaded file
         uploaded_successfully = False
-        total_file_size = 0
-        uploaded_files = []
         
         for file_path in downloaded_files:
             try:
                 file_size = os.path.getsize(file_path)
                 file_name = os.path.basename(file_path)
                 
-                # Check file size
-                if file_size > 2 * 1024 * 1024 * 1024:
-                    await message.reply_text(
-                        f"<b>❌ ғɪʟᴇ ᴛᴏᴏ ʟᴀʀɢᴇ:</b> {file_name}",
-                        parse_mode=ParseMode.HTML
-                    )
-                    continue
+                # Check file size and split if necessary
+                if file_size > 2 * 1024 * 1024 * 1024:  # 2GB
+                    print(f"📦 File too large, splitting: {file_name}")
+                    file_chunks = split_file(file_path)
+                else:
+                    file_chunks = [file_path]
                 
-                # STEP 3: Start uploading (upload_to_dump will handle progress)
-                print(f"📤 Starting upload: {file_name} ({format_bytes(file_size)})")
-                
-                # Upload to first dump channel (this will show live progress)
-                dump_message = await upload_to_dump(client, file_path, DUMP_CHAT_IDS[0], progress_tracker, status_msg)
-                
-                if dump_message:
-                    # STEP 4: Show upload complete message briefly
-                    await status_msg.edit_text(
-                        f"<b>✅ ᴜᴘʟᴏᴀᴅ sᴜᴄᴄᴇssғᴜʟ!</b>\n\n"
-                        f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                        f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
-                        f"<b>📤 ᴄᴏᴘʏɪɴɢ ᴛᴏ ᴏᴛʜᴇʀ ᴄʜᴀɴɴᴇʟs...</b>",
-                        parse_mode=ParseMode.HTML
-                    )
+                # Process each chunk
+                for chunk_path in file_chunks:
+                    chunk_size = os.path.getsize(chunk_path)
+                    chunk_name = os.path.basename(chunk_path)
                     
-                    # Copy to other dump channels (without buttons)
-                    for dump_id in DUMP_CHAT_IDS[1:]:
+                    print(f"📤 Starting upload: {chunk_name} ({format_bytes(chunk_size)})")
+                    
+                    # Upload to first dump channel
+                    dump_message = await upload_to_dump(client, chunk_path, DUMP_CHAT_IDS[0], progress_tracker, status_msg)
+                    
+                    if dump_message:
+                        # Show upload complete message briefly
+                        await status_msg.edit_text(
+                            f"<b>✅ ᴜᴘʟᴏᴀᴅ sᴜᴄᴄᴇssғᴜʟ!</b>\n\n"
+                            f"<b>📁 ғɪʟᴇ:</b> <code>{chunk_name}</code>\n"
+                            f"<b>💾 sɪᴢᴇ:</b> {format_bytes(chunk_size)}\n"
+                            f"<b>🆔 ᴅᴏᴡɴʟᴏᴀᴅ:</b> #{download_id}\n"
+                            f"<b>📤 ᴄᴏᴘʏɪɴɢ ᴛᴏ ᴏᴛʜᴇʀ ᴄʜᴀɴɴᴇʟs...</b>",
+                            parse_mode=ParseMode.HTML
+                        )
+                        
+                        # Copy to other dump channels
+                        for dump_id in DUMP_CHAT_IDS[1:]:
+                            try:
+                                await client.copy_message(
+                                    chat_id=dump_id,
+                                    from_chat_id=DUMP_CHAT_IDS[0],
+                                    message_id=dump_message.id
+                                )
+                            except Exception as e:
+                                print(f"❌ Error copying to dump {dump_id}: {e}")
+                        
+                        # Update status for sending to user
+                        await status_msg.edit_text(
+                            f"<b>📤 sᴇɴᴅɪɴɢ ᴛᴏ ʏᴏᴜ...</b>\n\n"
+                            f"<b>📁 ғɪʟᴇ:</b> <code>{chunk_name}</code>\n"
+                            f"<b>🆔 ᴅᴏᴡɴʟᴏᴀᴅ:</b> #{download_id}",
+                            parse_mode=ParseMode.HTML
+                        )
+                        
+                        # Create inline keyboard for user messages
+                        from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                        user_keyboard = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("📺 ᴍᴏʀᴇ ᴠɪᴅᴇᴏs", url="https://t.me/shizukawachan/20")]
+                        ])
+                        
+                        # Send to user WITH inline keyboard
                         try:
+                            user_message = await client.copy_message(
+                                chat_id=message.chat.id,
+                                from_chat_id=DUMP_CHAT_IDS[0],
+                                message_id=dump_message.id,
+                                reply_markup=user_keyboard
+                            )
+                        except Exception as e:
+                            print(f"❌ Error sending to user: {e}")
+                            # Fallback: send without keyboard
                             await client.copy_message(
-                                chat_id=dump_id,
+                                chat_id=message.chat.id,
                                 from_chat_id=DUMP_CHAT_IDS[0],
                                 message_id=dump_message.id
                             )
-                        except Exception as e:
-                            print(f"❌ Error copying to dump {dump_id}: {e}")
-                    
-                    # Update status for sending to user
-                    await status_msg.edit_text(
-                        f"<b>📤 sᴇɴᴅɪɴɢ ᴛᴏ ʏᴏᴜ...</b>\n\n"
-                        f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>",
-                        parse_mode=ParseMode.HTML
-                    )
-                    
-                    # Create inline keyboard ONLY for user messages
-                    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-                    user_keyboard = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("📺 ᴍᴏʀᴇ ᴠɪᴅᴇᴏs", url="https://t.me/shizukawachan/20")]
-                    ])
-                    
-                    # Send to user WITH inline keyboard
-                    try:
-                        user_message = await client.copy_message(
-                            chat_id=message.chat.id,
-                            from_chat_id=DUMP_CHAT_IDS[0],
-                            message_id=dump_message.id,
-                            reply_markup=user_keyboard  # Only for user messages
+                        
+                        uploaded_successfully = True
+                        
+                    else:
+                        await message.reply_text(
+                            f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ ᴜᴘʟᴏᴀᴅ:</b> {chunk_name}\n"
+                            f"<b>🆔 ᴅᴏᴡɴʟᴏᴀᴅ:</b> #{download_id}",
+                            parse_mode=ParseMode.HTML
                         )
-                    except Exception as e:
-                        print(f"❌ Error sending to user: {e}")
-                        # Fallback: send without keyboard
-                        await client.copy_message(
-                            chat_id=message.chat.id,
-                            from_chat_id=DUMP_CHAT_IDS[0],
-                            message_id=dump_message.id
-                        )
+                
+                # Update database stats
+                if uploaded_successfully:
+                    file_ext = os.path.splitext(file_name)[1].lower()
+                    if file_ext in ['.mp4', '.mkv', '.avi', '.mov', '.webm']:
+                        file_type = 'video'
+                    elif file_ext in ['.mp3', '.m4a', '.wav', '.flac', '.ogg']:
+                        file_type = 'audio'
+                    else:
+                        file_type = 'document'
                     
-                    # Track successful upload
-                    uploaded_successfully = True
-                    total_file_size += file_size
-                    uploaded_files.append({
-                        'name': file_name,
-                        'size': file_size,
-                        'path': file_path
-                    })
-                    
-                else:
-                    await message.reply_text(
-                        f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ ᴜᴘʟᴏᴀᴅ:</b> {os.path.basename(file_path)}",
-                        parse_mode=ParseMode.HTML
-                    )
+                    username = message.from_user.first_name or message.from_user.username or "Unknown"
+                    await update_download_stats(user_id, username, url, file_size, file_type)
                 
             except Exception as e:
                 print(f"❌ Error processing file {file_path}: {e}")
                 await message.reply_text(
-                    f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇɴᴅ:</b> {os.path.basename(file_path)}",
+                    f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇɴᴅ:</b> {os.path.basename(file_path)}\n"
+                    f"<b>🆔 ᴅᴏᴡɴʟᴏᴀᴅ:</b> #{download_id}",
                     parse_mode=ParseMode.HTML
                 )
         
-        # Update database stats after successful uploads
-        if uploaded_successfully and total_file_size > 0:
-            try:
-                # Extract site domain from URL
-                site_domain = extract_domain(url)
-                
-                # Get user info
-                username = message.from_user.first_name or message.from_user.username or "Unknown"
-                
-                # Determine file type
-                file_ext = os.path.splitext(uploaded_files[0]['name'])[1].lower()
-                if file_ext in ['.mp4', '.mkv', '.avi', '.mov', '.webm']:
-                    file_type = 'video'
-                elif file_ext in ['.mp3', '.m4a', '.wav', '.flac', '.ogg']:
-                    file_type = 'audio'
-                else:
-                    file_type = 'document'
-                
-                # Update download statistics in database
-                success = await update_download_stats(user_id, username, url, file_size, file_type)
-
-                if success:
-                    print(f"✅ Stats updated successfully for user {user_id}")
-                else:
-                    print(f"❌ Failed to update stats for user {user_id}")
-
-            except Exception as e:
-                print(f"❌ Error updating download stats: {e}")
-        
-        # STEP 5: Delete the status message after everything is done
+        # Delete the status message after everything is done
         if uploaded_successfully:
             try:
-                await asyncio.sleep(2)  # Brief delay to show final message
+                await asyncio.sleep(2)
                 await status_msg.delete()
             except Exception:
-                # If can't delete, just edit to final message
                 await status_msg.edit_text(
-                    "<b>✅ ᴀʟʟ ᴅᴏɴᴇ!</b>",
+                    f"<b>✅ ᴅᴏᴡɴʟᴏᴀᴅ #{download_id} ᴄᴏᴍᴘʟᴇᴛᴇᴅ!</b>",
                     parse_mode=ParseMode.HTML
                 )
         else:
-            # If no files uploaded successfully, show error
             await status_msg.edit_text(
-                "<b>❌ ɴᴏ ғɪʟᴇs ᴜᴘʟᴏᴀᴅᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!</b>",
+                f"<b>❌ ᴅᴏᴡɴʟᴏᴀᴅ #{download_id} ғᴀɪʟᴇᴅ!</b>\n\n"
+                "ɴᴏ ғɪʟᴇs ᴜᴘʟᴏᴀᴅᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!",
                 parse_mode=ParseMode.HTML
             )
         
     except Exception as e:
         print(f"❌ Error in download_and_send: {e}")
         await status_msg.edit_text(
-            f"<b>❌ ᴇʀʀᴏʀ:</b> {str(e)}",
+            f"<b>❌ ᴇʀʀᴏʀ:</b> {str(e)}\n"
+            f"<b>🆔 ᴅᴏᴡɴʟᴏᴀᴅ:</b> #{download_id}",
             parse_mode=ParseMode.HTML
         )
     
     finally:
         # Cleanup
-        cleanup_files(f"./downloads/{user_id}/")
-        if user_id in active_downloads:
-            del active_downloads[user_id]
+        cleanup_files(f"./downloads/{user_id}_{download_id}/")
+        remove_active_download(user_id, download_id)
 
-def extract_domain(url: str) -> str:
-    """Extract domain from URL"""
+@Client.on_message(filters.text & filters.private & ~filters.command([
+    "start", "help", "stats", "mystats", "history", "leaderboard", "ping", "speedtest",
+    "downloads", "cancel", "clearall", "globalstats", "clearuser", "addchannel", 
+    "removechannel", "showchannels", "cleanup"
+]))
+async def handle_url(client: Client, message: Message):
+    """Handle URL messages with multiple download support"""
     try:
-        from urllib.parse import urlparse
-        domain = urlparse(url).netloc
-        # Remove www. prefix and return clean domain
-        clean_domain = domain.replace('www.', '') if domain.startswith('www.') else domain
-        return clean_domain.lower()
-    except Exception as e:
-        print(f"Error extracting domain from {url}: {e}")
-        return "unknown"
-
-def format_bytes(bytes_value):
-    """Format bytes to human readable format"""
-    if bytes_value == 0:
-        return "0 B"
-    
-    size_names = ["B", "KB", "MB", "GB", "TB"]
-    import math
-    i = int(math.floor(math.log(bytes_value, 1024)))
-    p = math.pow(1024, i)
-    s = round(bytes_value / p, 2)
-    return f"{s} {size_names[i]}"
-
-
-async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_msg):
-    """Upload file to dump channel with progress using user session if available"""
-    try:
-        # Use user client if available, otherwise use bot client
-        upload_client = user_client if user_client else client
+        # Check subscription first
+        if not await check_subscription(client, message):
+            return
         
-        file_size = os.path.getsize(file_path)
-        file_name = os.path.basename(file_path)
+        user_id = message.from_user.id
+        username = message.from_user.first_name or message.from_user.username or "Unknown"
+        url = message.text.strip()
         
-        # Check if file needs splitting
-        if file_size > 1.98 * 1024 * 1024 * 1024:  # 1.98GB
-            print(f"📦 File too large ({format_bytes(file_size)}), splitting...")
-            await status_msg.edit_text(
-                f"<b>📦 sᴘʟɪᴛᴛɪɴɢ ʟᴀʀɢᴇ ғɪʟᴇ</b>\n\n"
-                f"<b>📁 ғɪʟᴇ:</b> {file_name}\n"
-                f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
-                f"<b>⏳ sᴛᴀᴛᴜs:</b> sᴘʟɪᴛᴛɪɴɢ...",
+        # Register/update user
+        await register_new_user(user_id, username, message.from_user.first_name or "")
+        
+        # Basic URL validation
+        if not (url.startswith('http://') or url.startswith('https://')):
+            await message.reply_text(
+                "<b>❌ ɪɴᴠᴀʟɪᴅ ᴜʀʟ!</b>\n\n"
+                "ᴘʟᴇᴀsᴇ sᴇɴᴅ ᴀ ᴠᴀʟɪᴅ ᴜʀʟ sᴛᴀʀᴛɪɴɢ ᴡɪᴛʜ http:// ᴏʀ https://",
                 parse_mode=ParseMode.HTML
             )
-            
-            file_chunks = split_file(file_path)
-            uploaded_messages = []
-            
-            for i, chunk_path in enumerate(file_chunks, 1):
-                chunk_size = os.path.getsize(chunk_path)
-                chunk_name = os.path.basename(chunk_path)
-                
-                await status_msg.edit_text(
-                    f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {i}/{len(file_chunks)}</b>\n\n"
-                    f"<b>📁 ғɪʟᴇ:</b> {chunk_name}\n"
-                    f"<b>💾 sɪᴢᴇ:</b> {format_bytes(chunk_size)}\n"
-                    f"<b>⏳ sᴛᴀᴛᴜs:</b> ᴜᴘʟᴏᴀᴅɪɴɢ...",
-                    parse_mode=ParseMode.HTML
-                )
-                
-                # Upload chunk
-                chunk_msg = await upload_single_file(upload_client, chunk_path, dump_id, progress_tracker, status_msg, i, len(file_chunks))
-                if chunk_msg:
-                    uploaded_messages.append(chunk_msg)
-                
-                # Clean up chunk file
-                try:
-                    os.remove(chunk_path)
-                except:
-                    pass
-            
-            return uploaded_messages[0] if uploaded_messages else None
-        else:
-            # Show initial upload message for single files
-            # await status_msg.edit_text(
-            #     f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ </b>\n\n"
-            #     f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-            #     f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
-            #     f"<b>📊 ᴘʀᴏɢʀᴇss:</b> 0.0%\n"
-            #     f"<b>⚡ sᴘᴇᴇᴅ:</b> ᴄᴀʟᴄᴜʟᴀᴛɪɴɢ...\n"
-            #     f"<b>⏳ sᴛᴀᴛᴜs:</b> sᴛᴀʀᴛɪɴɢ ᴜᴘʟᴏᴀᴅ...",
-            #     parse_mode=ParseMode.HTML
-            # )
-            
-            # Upload single file (NO KEYBOARD - dump channel only)
-            return await upload_single_file(upload_client, file_path, dump_id, progress_tracker, status_msg)
+            return
         
-    except Exception as e:
-        print(f"❌ Error uploading to dump: {e}")
-        await status_msg.edit_text(
-            f"<b>❌ ᴜᴘʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
-            f"<b>📁 ғɪʟᴇ:</b> <code>{os.path.basename(file_path)}</code>\n"
-            f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
-            parse_mode=ParseMode.HTML
-        )
-        return None
-
-
-async def upload_single_file(upload_client, file_path, dump_id, progress_tracker, status_msg, part_num=None, total_parts=None):
-    """Upload a single file with real-time progress tracking and speed display"""
-    try:
-        import time
+        # Check current active downloads for user
+        current_downloads = get_active_download_count(user_id)
+        max_concurrent = 3  # Allow up to 3 concurrent downloads per user
         
-        file_size = os.path.getsize(file_path)
-        file_name = os.path.basename(file_path)
-        
-        # Initialize progress tracking variables
-        last_update = 0
-        upload_start_time = time.time()
-        last_uploaded = 0
-        
-        # Show initial upload message
-        initial_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ</b>\n\n"
-        if part_num and total_parts:
-            initial_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {part_num}/{total_parts}</b>\n\n"
-        
-        initial_text += (
-            f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-            f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
-            f"<b>📊 ᴘʀᴏɢʀᴇss:</b> 0.0%\n"
-            f"<b>⚡ sᴘᴇᴇᴅ:</b> ᴄᴀʟᴄᴜʟᴀᴛɪɴɢ...\n"
-            f"<b>⏳ sᴛᴀᴛᴜs:</b> sᴛᴀʀᴛɪɴɢ ᴜᴘʟᴏᴀᴅ..."
-        )
-        
-        await status_msg.edit_text(initial_text, parse_mode=ParseMode.HTML)
-        
-        # Create a separate task for progress updates
-        progress_data = {
-            'current': 0,
-            'total': file_size,
-            'last_update': 0,
-            'start_time': upload_start_time,
-            'last_uploaded': 0
-        }
-        
-        # Progress update task that runs independently
-        async def update_progress_task():
-            while progress_data['current'] < progress_data['total']:
-                try:
-                    current = progress_data['current']
-                    total = progress_data['total']
-                    
-                    if current == 0:
-                        await asyncio.sleep(1)
-                        continue
-                    
-                    # Calculate speeds and ETA
-                    now = time.time()
-                    total_time = now - progress_data['start_time']
-                    avg_speed = current / total_time if total_time > 0 else 0
-                    
-                    remaining_bytes = total - current
-                    eta = remaining_bytes / avg_speed if avg_speed > 0 else 0
-                    
-                    # Calculate percentage and create progress bar
-                    percentage = (current / total) * 100 if total > 0 else 0
-                    progress_bar = create_progress_bar(percentage)
-                    
-                    # Create status text
-                    if part_num and total_parts:
-                        status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {part_num}/{total_parts}</b>\n\n"
-                    else:
-                        status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ..</b>\n\n"
-                    
-                    status_text += (
-                        f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                        f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n\n"
-                        f"<b>📊 ᴘʀᴏɢʀᴇss:</b>\n"
-                        f"<code>{progress_bar}</code> <b>{percentage:.1f}%</b>\n\n"
-                        f"<b>📤 ᴜᴘʟᴏᴀᴅᴇᴅ:</b> {format_bytes(current)} / {format_bytes(total)}\n"
-                        f"<b>📈 ᴀᴠᴇʀᴀɢᴇ sᴘᴇᴇᴅ:</b> {format_bytes(avg_speed)}/s\n"
-                        f"<b>⏱️ ᴇᴛᴀ:</b> {format_time(eta)}"
-                    )
-                    
-                    # Update message
-                    await safe_edit_message(status_msg, status_text)
-                    await asyncio.sleep(2)  # Update every 2 seconds
-                    
-                except Exception as e:
-                    print(f"Progress update error: {e}")
-                    await asyncio.sleep(2)
-        
-        # Simple progress callback that just updates the data
-        def upload_progress(current, total):
-            progress_data['current'] = current
-            progress_data['total'] = total
-        
-        # Start progress update task
-        progress_task = asyncio.create_task(update_progress_task())
-        
-        # Create caption with metadata - NO INLINE KEYBOARD for dump channels
-        metadata = progress_tracker.metadata
-        if part_num and total_parts:
-            caption = f"<b>📁 {file_name}</b>\n<b>📦 Part {part_num}/{total_parts} | {format_bytes(file_size)}</b>\n\n"
-        else:
-            caption = f"<b>📁 {file_name}</b>\n<b>📦 {format_bytes(file_size)}</b>\n\n"
-        
-        # Add metadata if available
-        # if metadata:
-        #     if metadata.get('title'):
-        #         caption += f"<b>🎬 ᴛɪᴛʟᴇ:</b> {metadata['title'][:50]}{'...' if len(metadata['title']) > 50 else ''}\n"
-        #     if metadata.get('duration'):
-        #         caption += f"<b>⏱️ ᴅᴜʀᴀᴛɪᴏɴ:</b> {metadata['duration_string']}\n"
-        #     if metadata.get('uploader'):
-        #         caption += f"<b>👤 ᴜᴘʟᴏᴀᴅᴇʀ:</b> {metadata['uploader'][:30]}{'...' if len(metadata['uploader']) > 30 else ''}\n"
-        #     caption += "\n"
-        
-        # caption += f"<b>🤖 ᴜᴘʟᴏᴀᴅᴇᴅ ʙʏ:</b> @{Config.BOT_USERNAME}"
-        
-        # Generate thumbnail for videos
-        thumbnail_path = None
-        if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
-            thumbnail_path = f"{os.path.dirname(file_path)}/thumb_{int(time.time())}.jpg"
-            generated_thumb = await generate_thumbnail(file_path, thumbnail_path, 10)
-            if not generated_thumb:
-                thumbnail_path = None
-        
-        # Get video dimensions
-        width, height = 1280, 720
-        if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
-            width, height = await get_video_dimensions(file_path)
-        
-        # Upload with retry mechanism
-        max_retries = 3
-        dump_message = None
-        
-        try:
-            if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
-                # Send as video to DUMP CHANNEL - NO KEYBOARD
-                dump_message = await upload_client.send_video(
-                    chat_id=dump_id,
-                    video=file_path,
-                    caption=caption,
-                    supports_streaming=True,
-                    thumb=thumbnail_path,
-                    duration=int(metadata.get('duration', 0)) if metadata else 0,
-                    width=width,
-                    height=height,
-                    progress=upload_progress,
-                    parse_mode=ParseMode.HTML
-                )
-            elif file_path.lower().endswith(('.mp3', '.m4a', '.wav', '.flac', '.ogg')):
-                # Send as audio to DUMP CHANNEL - NO KEYBOARD
-                dump_message = await upload_client.send_audio(
-                    chat_id=dump_id,
-                    audio=file_path,
-                    caption=caption,
-                    duration=int(metadata.get('duration', 0)) if metadata else 0,
-                    performer=metadata.get('uploader', 'Unknown') if metadata else 'Unknown',
-                    title=metadata.get('title', file_name) if metadata else file_name,
-                    thumb=thumbnail_path,
-                    progress=upload_progress,
-                    parse_mode=ParseMode.HTML
-                )
-            else:
-                # Send as document to DUMP CHANNEL - NO KEYBOARD
-                dump_message = await upload_client.send_document(
-                    chat_id=dump_id,
-                    document=file_path,
-                    caption=caption,
-                    thumb=thumbnail_path,
-                    progress=upload_progress,
-                    parse_mode=ParseMode.HTML
-                )
-        
-        except Exception as e:
-            print(f"❌ Upload failed: {e}")
-            raise e
-        
-        finally:
-            # Cancel progress task
-            progress_task.cancel()
-            
-            # Clean up thumbnail
-            if thumbnail_path and os.path.exists(thumbnail_path):
-                try:
-                    os.remove(thumbnail_path)
-                except:
-                    pass
-        
-        # Final upload success message
-        if dump_message:
-            upload_time = time.time() - upload_start_time
-            avg_speed = file_size / upload_time if upload_time > 0 else 0
-            
-            await status_msg.edit_text(
-                f"<b>✅ ᴜᴘʟᴏᴀᴅ ᴄᴏᴍᴘʟᴇᴛᴇᴅ!</b>\n\n"
-                f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
-                f"<b>⏱️ ᴛɪᴍᴇ ᴛᴀᴋᴇɴ:</b> {format_time(upload_time)}\n"
-                f"<b>📈 ᴀᴠᴇʀᴀɢᴇ sᴘᴇᴇᴅ:</b> {format_bytes(avg_speed)}/s",
+        if current_downloads >= max_concurrent:
+            await message.reply_text(
+                f"<b>⚠️ ᴍᴀx ᴅᴏᴡɴʟᴏᴀᴅs ʀᴇᴀᴄʜᴇᴅ!</b>\n\n"
+                f"ʏᴏᴜ ᴄᴜʀʀᴇɴᴛʟʏ ʜᴀᴠᴇ <b>{current_downloads}</b> ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs.\n"
+                f"ᴍᴀxɪᴍᴜᴍ ᴀʟʟᴏᴡᴇᴅ: <b>{max_concurrent}</b>\n\n"
+                "ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ғᴏʀ ᴄᴜʀʀᴇɴᴛ ᴅᴏᴡɴʟᴏᴀᴅs ᴛᴏ ᴄᴏᴍᴘʟᴇᴛᴇ.",
                 parse_mode=ParseMode.HTML
             )
+            return
         
-        return dump_message
+        # Generate unique download ID
+        global download_counter
+        download_counter += 1
+        download_id = download_counter
         
-    except Exception as e:
-        print(f"❌ Error uploading single file: {e}")
-        await status_msg.edit_text(
-            f"<b>❌ ᴜᴘʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
-            f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-            f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
+        # Add to active downloads
+        progress_tracker = add_active_download(user_id, download_id, url)
+        
+        # Send initial status message
+        status_msg = await message.reply_text(
+            f"<b>🔄 ɪɴɪᴛɪᴀʟɪᴢɪɴɢ ᴅᴏᴡɴʟᴏᴀᴅ...</b>\n\n"
+            f"<b>🆔 ᴅᴏᴡɴʟᴏᴀᴅ:</b> #{download_id}\n"
+            f"<b>🌐 ᴜʀʟ:</b> <code>{url[:50]}{'...' if len(url) > 50 else ''}</code>\n"
+            f"<b>📊 ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {current_downloads + 1}",
             parse_mode=ParseMode.HTML
         )
-        return None
-
-
-async def safe_edit_message(message, text):
-    """Safely edit message without throwing exceptions"""
-    try:
-        await message.edit_text(text, parse_mode=ParseMode.HTML)
-    except Exception:
-        # Silently ignore all edit errors (rate limits, message not modified, etc.)
-        pass
-
-def cleanup_files(directory):
-    """Clean up downloaded files"""
-    try:
-        if os.path.exists(directory):
-            for file in os.listdir(directory):
-                file_path = os.path.join(directory, file)
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
-            os.rmdir(directory)
-            print(f"✅ Cleaned up: {directory}")
+        
+        print(f"🚀 Starting download {download_id} for user {user_id}: {url}")
+        
+        # Start download in background
+        asyncio.create_task(download_and_send(client, message, status_msg, url, user_id, download_id))
+        
     except Exception as e:
-        print(f"❌ Cleanup error: {e}")
+        print(f"❌ Error handling URL: {e}")
+        await message.reply_text(
+            "<b>❌ ᴇʀʀᴏʀ ᴘʀᴏᴄᴇssɪɴɢ ʀᴇǫᴜᴇsᴛ!</b>",
+            parse_mode=ParseMode.HTML
+        )
 
-
-async def update_progress(status_msg, user_id, url):
-    """Update progress message every few seconds"""
-    try:
-        while user_id in active_downloads:
-            progress_tracker = active_downloads[user_id]
-            
-            if progress_tracker.total_size > 0:
-                percentage = (progress_tracker.downloaded / progress_tracker.total_size) * 100
-                progress_bar = create_progress_bar(percentage)
-                
-                downloaded_str = format_bytes(progress_tracker.downloaded)
-                total_str = format_bytes(progress_tracker.total_size)
-                speed_str = format_bytes(progress_tracker.speed) + "/s" if progress_tracker.speed > 0 else "0 ʙ/s"
-                eta_str = format_time(progress_tracker.eta) if progress_tracker.eta > 0 else "ᴜɴᴋɴᴏᴡɴ"
-                
-                progress_text = f"<b>📥 {progress_tracker.status}</b>\n\n"
-                progress_text += f"<b>📊 ᴘʀᴏɢʀᴇss:</b>\n"
-                progress_text += f"<code>{progress_bar}</code> <b>{percentage:.1f}%</b>\n\n"
-                progress_text += f"<b>📦 sɪᴢᴇ:</b> {downloaded_str} / {total_str}\n"
-                progress_text += f"<b>⚡ sᴘᴇᴇᴅ:</b> {speed_str}\n"
-                progress_text += f"<b>⏱️ ᴇᴛᴀ:</b> {eta_str}\n"
-                progress_text += f"<b>📁 ғɪʟᴇ:</b> <code>{os.path.basename(progress_tracker.filename)}</code>"
-            else:
-                progress_text = f"<b>📥 {progress_tracker.status}</b>\n\n"
-                progress_text += f"<b>🔗 ᴜʀʟ:</b> <code>{url}</code>\n"
-                progress_text += f"<b>⏳ sᴛᴀᴛᴜs:</b> ᴀɴᴀʟʏᴢɪɴɢ ᴠɪᴅᴇᴏ..."
-            
-            try:
-                await status_msg.edit_text(progress_text, parse_mode=ParseMode.HTML)
-            except Exception:
-                # Ignore edit errors
-                pass
-            
-            await asyncio.sleep(3)  # Update every 3 seconds
-            
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        print(f"❌ Progress update error: {e}")
-
-def download_video(url, ydl_opts):
-    """Download video using yt-dlp with speed optimizations"""
-    try:
-        import yt_dlp
-        import os
-        import platform
-        from urllib.parse import urlparse
-        
-        domain = urlparse(url).netloc.lower()
-        
-        # Speed-optimized options
-        speed_opts = {
-            **ydl_opts,
-            
-            # Connection optimization
-            'concurrent_fragment_downloads': 4,  # Download 4 fragments simultaneously
-            'retries': 5,
-            'fragment_retries': 5,
-            'retry_sleep_functions': {
-                'http': lambda n: min(2 ** n, 10),  # Faster retry intervals
-                'fragment': lambda n: min(2 ** n, 5)
-            },
-            
-            # Buffer and timeout settings
-            'socket_timeout': 30,
-            'http_chunk_size': 1024 * 1024,  # 1MB chunks
-            
-            # Headers for better speed
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-            },
-            
-            # Disable unnecessary features for speed
-            'writesubtitles': False,
-            'writeautomaticsub': False,
-            'writethumbnail': False,
-            'writeinfojson': False,
-            'no_check_certificate': True,
-            'prefer_insecure': True,  # Use HTTP when possible for speed
-        }
-        
-        # Site-specific speed optimizations
-        if 'youtube' in domain or 'youtu.be' in domain:
-            speed_opts.update({
-                'format': 'best[height<=720][protocol^=https]/best[height<=480]/best',
-                'extractor_args': {
-                    'youtube': {
-                        'skip': ['dash'],  # Skip DASH for faster downloads
-                        'player_skip': ['js'],
-                    }
-                }
-            })
-            
-        elif 'instagram' in domain:
-            speed_opts.update({
-                'format': 'best/worst',
-                'concurrent_fragment_downloads': 2,  # Instagram is more restrictive
-            })
-            
-        elif any(adult_site in domain for adult_site in ['pornhub', 'xvideos', 'xnxx', 'xhamster']):
-            speed_opts.update({
-                'format': 'best[height<=720]/best',
-                'concurrent_fragment_downloads': 6,  # Adult sites often allow more connections
-                'http_headers': {
-                    **speed_opts['http_headers'],
-                    'Referer': f'https://{domain}/',
-                }
-            })
-            
-        else:
-            # Generic sites
-            speed_opts.update({
-                'format': 'best/worst',
-                'concurrent_fragment_downloads': 3,
-            })
-        
-        print(f"🚀 Starting optimized download from {domain}...")
-        print(f"   Concurrent fragments: {speed_opts.get('concurrent_fragment_downloads', 1)}")
-        print(f"   Chunk size: {speed_opts.get('http_chunk_size', 'default')}")
-        
-        try:
-            with yt_dlp.YoutubeDL(speed_opts) as ydl:
-                ydl.download([url])
-                print(f"✅ High-speed download successful")
-                return True
-                
-        except Exception as e:
-            print(f"❌ High-speed download failed: {e}")
-            
-            # Fallback with conservative settings
-            print(f"🔄 Trying conservative fallback...")
-            conservative_opts = {
-                **ydl_opts,
-                'format': 'worst/best',
-                'concurrent_fragment_downloads': 1,
-                'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
-                },
-                'socket_timeout': 60,
-                'retries': 3,
-            }
-            
-            try:
-                with yt_dlp.YoutubeDL(conservative_opts) as ydl_conservative:
-                    ydl_conservative.download([url])
-                    print(f"✅ Conservative download successful")
-                    return True
-            except Exception as e2:
-                print(f"❌ All download attempts failed: {e2}")
-                return False
-                        
-    except Exception as e:
-        print(f"❌ Critical download error: {e}")
-        return False
-
-
-def cleanup_files(directory):
-    """Clean up downloaded files"""
-    try:
-        if os.path.exists(directory):
-            for file in os.listdir(directory):
-                file_path = os.path.join(directory, file)
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
-            os.rmdir(directory)
-            print(f"✅ Cleaned up: {directory}")
-    except Exception as e:
-        print(f"❌ Cleanup error: {e}")
-
-@Client.on_message(filters.command("cancel") & filters.private)
-async def cancel_command(client: Client, message: Message):
-    """Cancel active download"""
+@Client.on_message(filters.command("downloads") & filters.private)
+async def show_downloads_command(client: Client, message: Message):
+    """Show user's active downloads"""
     try:
         user_id = message.from_user.id
         
-        if user_id in active_downloads:
-            del active_downloads[user_id]
-            cleanup_files(f"./downloads/{user_id}/")
+        if user_id not in active_downloads or not active_downloads[user_id]:
             await message.reply_text(
-                "<b>✅ ᴅᴏᴡɴʟᴏᴀᴅ ᴄᴀɴᴄᴇʟʟᴇᴅ!</b>",
+                "<b>📥 ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs</b>\n\n"
+                "❌ ɴᴏ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs ғᴏᴜɴᴅ.",
                 parse_mode=ParseMode.HTML
             )
-        else:
-            await message.reply_text(
-                "<b>❌ ɴᴏ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs</b>\n\n"
-                "ʏᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ ᴀɴʏ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs ᴛᴏ ᴄᴀɴᴄᴇʟ.",
-                parse_mode=ParseMode.HTML
-            )
+            return
+        
+        downloads_text = "<b>📥 ʏᴏᴜʀ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs</b>\n\n"
+        
+        for i, tracker in enumerate(active_downloads[user_id], 1):
+            # Calculate progress
+            if tracker.total_size > 0:
+                progress_percent = (tracker.downloaded / tracker.total_size) * 100
+            else:
+                progress_percent = 0
             
+            # Format filename
+            filename = tracker.filename
+            if len(filename) > 25:
+                filename = filename[:22] + "..."
+            
+            # Format URL
+            url_display = tracker.url
+            if len(url_display) > 30:
+                url_display = url_display[:27] + "..."
+            
+            downloads_text += (
+                f"<b>{i}. ᴅᴏᴡɴʟᴏᴀᴅ #{tracker.download_id}</b>\n"
+                f"   📁 <code>{filename}</code>\n"
+                f"   📊 {progress_percent:.1f}% • {tracker.status}\n"
+                f"   🌐 <code>{url_display}</code>\n"
+                f"   ⚡ {format_bytes(tracker.speed)}/s\n\n"
+            )
+        
+        downloads_text += f"<b>📈 ᴛᴏᴛᴀʟ ᴀᴄᴛɪᴠᴇ:</b> {len(active_downloads[user_id])}"
+        
+        await message.reply_text(downloads_text, parse_mode=ParseMode.HTML)
+        
+    except Exception as e:
+        print(f"❌ Error in downloads command: {e}")
+        await message.reply_text(
+            "<b>❌ ᴇʀʀᴏʀ ʟᴏᴀᴅɪɴɢ ᴅᴏᴡɴʟᴏᴀᴅs!</b>",
+            parse_mode=ParseMode.HTML
+        )
+
+@Client.on_message(filters.command("cancel") & filters.private)
+async def cancel_download_command(client: Client, message: Message):
+    """Cancel a specific download"""
+    try:
+        user_id = message.from_user.id
+        
+        # Parse command
+        command_parts = message.text.split()
+        if len(command_parts) < 2:
+            await message.reply_text(
+                "<b>📝 ᴜsᴀɢᴇ:</b>\n\n"
+                "<code>/cancel [download_id]</code>\n\n"
+                "<b>ᴇxᴀᴍᴘʟᴇ:</b>\n"
+                "<code>/cancel 123</code>\n\n"
+                "ᴜsᴇ /downloads ᴛᴏ sᴇᴇ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ ɪᴅs.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        try:
+            download_id = int(command_parts[1])
+        except ValueError:
+            await message.reply_text(
+                "❌ <b>ɪɴᴠᴀʟɪᴅ ᴅᴏᴡɴʟᴏᴀᴅ ɪᴅ!</b>\n\n"
+                "ᴘʟᴇᴀsᴇ ᴘʀᴏᴠɪᴅᴇ ᴀ ᴠᴀʟɪᴅ ɴᴜᴍʙᴇʀ.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        # Find and remove the download
+        tracker = get_download_tracker(user_id, download_id)
+        if not tracker:
+            await message.reply_text(
+                f"❌ <b>ᴅᴏᴡɴʟᴏᴀᴅ #{download_id} ɴᴏᴛ ғᴏᴜɴᴅ!</b>\n\n"
+                "ᴜsᴇ /downloads ᴛᴏ sᴇᴇ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        # Remove from active downloads
+        remove_active_download(user_id, download_id)
+        
+        # Clean up files
+        cleanup_files(f"./downloads/{user_id}_{download_id}/")
+        
+        await message.reply_text(
+            f"✅ <b>ᴅᴏᴡɴʟᴏᴀᴅ #{download_id} ᴄᴀɴᴄᴇʟʟᴇᴅ!</b>\n\n"
+            f"ғɪʟᴇs ʜᴀᴠᴇ ʙᴇᴇɴ ᴄʟᴇᴀɴᴇᴅ ᴜᴘ.",
+            parse_mode=ParseMode.HTML
+        )
+        
+        print(f"🚫 Download {download_id} cancelled by user {user_id}")
+        
     except Exception as e:
         print(f"❌ Error in cancel command: {e}")
         await message.reply_text(
-            "<b>❌ ᴇʀʀᴏʀ ᴏᴄᴄᴜʀʀᴇᴅ ᴡʜɪʟᴇ ᴄᴀɴᴄᴇʟʟɪɴɢ</b>",
+            "❌ <b>ᴇʀʀᴏʀ ᴄᴀɴᴄᴇʟʟɪɴɢ ᴅᴏᴡɴʟᴏᴀᴅ!</b>",
             parse_mode=ParseMode.HTML
         )
 
 @Client.on_message(filters.command("stats") & filters.private)
 async def stats_command(client: Client, message: Message):
     """Handle /stats command with database integration"""
-
     try:
-        user_id = message.from_user.id
-        
-        # Check if user is admin (optional)
-        if user_id not in [7560922302]:  # Replace with your admin ID
-            await message.reply_text("❌ <b>ᴀᴅᴍɪɴ ᴏɴʟʏ ᴄᴏᴍᴍᴀɴᴅ!</b>", parse_mode=ParseMode.HTML)
-            return
-        
         # Get stats from database
         stats = await get_stats()
         user_count = await get_user_count()
         
-        # Get additional stats
-        total_downloads = stats.get('total_downloads', 0)
-        total_file_size = stats.get('total_file_size', 0)
-        
-        # Format file size
-        def format_size(size_bytes):
-            if size_bytes == 0:
-                return "0 B"
-            size_names = ["B", "KB", "MB", "GB", "TB"]
-            import math
-            i = int(math.floor(math.log(size_bytes, 1024)))
-            p = math.pow(1024, i)
-            s = round(size_bytes / p, 2)
-            return f"{s} {size_names[i]}"
+        # Calculate total active downloads across all users
+        total_active = sum(len(downloads) for downloads in active_downloads.values())
         
         stats_text = (
             "<b>📊 ʙᴏᴛ sᴛᴀᴛɪsᴛɪᴄs</b>\n\n"
             f"<b>🤖 ʙᴏᴛ ɴᴀᴍᴇ:</b> {Config.BOT_NAME}\n"
             f"<b>👥 ᴛᴏᴛᴀʟ ᴜsᴇʀs:</b> {user_count:,}\n"
-            f"<b>📥 ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {total_downloads:,}\n"
-            f"<b>💾 ᴛᴏᴛᴀʟ ғɪʟᴇ sɪᴢᴇ:</b> {format_size(total_file_size)}\n"
-            f"<b>🔄 ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {len(active_downloads)}\n"
-            f"<b>📏 ᴍᴀx ғɪʟᴇ sɪᴢᴇ:</b> 2ɢʙ\n\n"
+            f"<b>📥 ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {stats.get('total_downloads', 0):,}\n"
+            f"<b>🔄 ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {total_active}\n"
+            f"<b>👤 ᴀᴄᴛɪᴠᴇ ᴜsᴇʀs:</b> {len(active_downloads)}\n"
+            f"<b>💾 ᴍᴀx ғɪʟᴇ sɪᴢᴇ:</b> 2ɢʙ\n"
+            f"<b>🔢 ᴍᴀx ᴄᴏɴᴄᴜʀʀᴇɴᴛ:</b> 3 ᴘᴇʀ ᴜsᴇʀ\n\n"
         )
         
-        # Show top sites if available
+        # Show top sites if available - fix the sorting issue
         sites = stats.get('sites', {})
-        if sites:
-            top_sites = sorted(sites.items(), key=lambda x: x[1], reverse=True)[:5]
-            stats_text += "<b>🌐 ᴛᴏᴘ sɪᴛᴇs:</b>\n"
-            for site, count in top_sites:
-                stats_text += f"• {site}: {count:,} downloads\n"
-            stats_text += "\n"
-        
-        # Show top users if available
-        top_users_data = stats.get('top_users', {})
-        if top_users_data:
-            sorted_users = sorted(top_users_data.items(), key=lambda x: x[1], reverse=True)[:5]
-            stats_text += "<b>👑 ᴛᴏᴘ ᴜsᴇʀs:</b>\n"
-            for user_id, download_count in sorted_users:
-                try:
-                    user = await client.get_users(int(user_id))
-                    name = user.first_name or "Unknown"
-                    stats_text += f"• {name}: {download_count:,} downloads\n"
-                except:
-                    stats_text += f"• User {user_id}: {download_count:,} downloads\n"
-            stats_text += "\n"
-        
-        # Show file types if available
-        file_types = stats.get('file_types', {})
-        if file_types:
-            stats_text += "<b>📁 ғɪʟᴇ ᴛʏᴘᴇs:</b>\n"
-            for file_type, count in sorted(file_types.items(), key=lambda x: x[1], reverse=True)[:3]:
-                stats_text += f"• {file_type.title()}: {count:,}\n"
-            stats_text += "\n"
+        if sites and isinstance(sites, dict):
+            try:
+                # Convert to list of tuples and sort by count (value)
+                sites_list = [(site, count) for site, count in sites.items() if isinstance(count, (int, float))]
+                top_sites = sorted(sites_list, key=lambda x: x[1], reverse=True)[:3]
+                
+                if top_sites:
+                    stats_text += "<b>🌐 ᴛᴏᴘ sɪᴛᴇs:</b>\n"
+                    for site, count in top_sites:
+                        stats_text += f"• {site}: {count:,}\n"
+                    stats_text += "\n"
+            except Exception as e:
+                print(f"Error processing sites: {e}")
         
         stats_text += "<b>✅ sᴛᴀᴛᴜs:</b> ʙᴏᴛ ɪs ᴡᴏʀᴋɪɴɢ!"
         
@@ -1263,94 +869,16 @@ async def stats_command(client: Client, message: Message):
         
     except Exception as e:
         print(f"❌ Error in stats command: {e}")
+        import traceback
+        traceback.print_exc()
         await message.reply_text(
             "<b>❌ ᴇʀʀᴏʀ ʟᴏᴀᴅɪɴɢ sᴛᴀᴛɪsᴛɪᴄs</b>",
             parse_mode=ParseMode.HTML
         )
 
-async def get_stats():
-    """Get bot statistics"""
-    try:
-        stats = await database.stats_data.find_one({"_id": "bot_stats"})
-        if not stats:
-            return {
-                "total_downloads": 0,
-                "total_file_size": 0,
-                "sites": {},
-                "top_users": {},
-                "file_types": {}
-            }
-        return stats
-    except Exception as e:
-        print(f"❌ Error getting stats: {e}")
-        return {
-            "total_downloads": 0,
-            "total_file_size": 0,
-            "sites": {},
-            "top_users": {},
-            "file_types": {}
-        }
-
-async def get_user(user_id: int):
-    """Get user data from database"""
-    try:
-        user = await database.user_data.find_one({"_id": user_id})
-        if not user:
-            # Return default user data
-            return {
-                "_id": user_id,
-                "username": "",
-                "first_name": "",
-                "total_downloads": 0,
-                "total_size": 0,
-                "favorite_sites": {},
-                "join_date": datetime.now(),
-                "last_activity": datetime.now()
-            }
-        return user
-    except Exception as e:
-        print(f"❌ Error getting user {user_id}: {e}")
-        return {
-            "_id": user_id,
-            "username": "",
-            "first_name": "",
-            "total_downloads": 0,
-            "total_size": 0,
-            "favorite_sites": {},
-            "join_date": datetime.now(),
-            "last_activity": datetime.now()
-        }
-
-async def get_user_rank(user_id: int):
-    """Get user's rank based on total downloads"""
-    try:
-        user = await get_user(user_id)
-        user_downloads = user.get('total_downloads', 0)
-        
-        # Count users with more downloads
-        higher_users = await database.user_data.count_documents({
-            'total_downloads': {'$gt': user_downloads}
-        })
-        
-        return higher_users + 1
-    except Exception as e:
-        print(f"❌ Error getting user rank for {user_id}: {e}")
-        return 0
-
-async def get_user_download_history(user_id: int, limit: int = 10):
-    """Get user's download history"""
-    try:
-        history = []
-        async for entry in database.download_history.find({'user_id': user_id}).sort('download_time', -1).limit(limit):
-            history.append(entry)
-        return history
-    except Exception as e:
-        print(f"❌ Error getting download history for user {user_id}: {e}")
-        return []
-
 @Client.on_message(filters.command("mystats") & filters.private)
 async def mystats_command(client: Client, message: Message):
-    """Show user's personal statistics - FIXED VERSION"""
+    """Show user's personal statistics"""
     try:
         user_id = message.from_user.id
         username = message.from_user.first_name or message.from_user.username or "Unknown"
@@ -1360,72 +888,57 @@ async def mystats_command(client: Client, message: Message):
         
         # Get user data from database
         user = await get_user(user_id)
+        user_rank = await get_user_rank(user_id)
         
-        # Get user's download history to verify data
-        history = await get_user_download_history(user_id, 100)
-        history_count = len(history) if history else 0
+        # Get user's download history
+        history = await get_user_download_history(user_id, 5)
         
-        # Check if stats need to be recalculated
-        db_downloads = user.get('total_downloads', 0)
-        if db_downloads == 0 and history_count > 0:
-            # Stats are out of sync, show warning
-            mystats_text = (
-                f"<b>📊 ʏᴏᴜʀ sᴛᴀᴛɪsᴛɪᴄs</b>\n\n"
-                f"<b>👤 ɴᴀᴍᴇ:</b> {username}\n"
-                f"<b>🆔 ᴜsᴇʀ ɪᴅ:</b> <code>{user_id}</code>\n\n"
-                f"⚠️ <b>sᴛᴀᴛs ᴏᴜᴛ ᴏғ sʏɴᴄ!</b>\n"
-                f"📋 <b>ʜɪsᴛᴏʀʏ ʀᴇᴄᴏʀᴅs:</b> {history_count}\n"
-                f"📊 <b>ᴅᴀᴛᴀʙᴀsᴇ sᴛᴀᴛs:</b> {db_downloads}\n\n"
-                f"💡 <b>ᴜsᴇ /fixstats ᴛᴏ ʀᴇᴘᴀɪʀ!</b>"
-            )
-        else:
-            # Normal stats display
-            user_rank = await get_user_rank(user_id)
-            
-            def format_size(size_bytes):
-                if size_bytes == 0:
-                    return "0 B"
-                size_names = ["B", "KB", "MB", "GB", "TB"]
-                import math
-                i = int(math.floor(math.log(size_bytes, 1024)))
-                p = math.pow(1024, i)
-                s = round(size_bytes / p, 2)
-                return f"{s} {size_names[i]}"
-            
-            mystats_text = f"<b>📊 ʏᴏᴜʀ sᴛᴀᴛɪsᴛɪᴄs</b>\n\n"
-            mystats_text += f"<b>👤 ɴᴀᴍᴇ:</b> {username}\n"
-            mystats_text += f"<b>🆔 ᴜsᴇʀ ɪᴅ:</b> <code>{user_id}</code>\n"
-            mystats_text += f"<b>📥 ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {user.get('total_downloads', 0):,}\n"
-            mystats_text += f"<b>💾 ᴛᴏᴛᴀʟ sɪᴢᴇ:</b> {format_size(user.get('total_size', 0))}\n"
-            mystats_text += f"<b>🏆 ʀᴀɴᴋ:</b> #{user_rank}\n"
-            mystats_text += f"<b>📅 ᴊᴏɪɴᴇᴅ:</b> {user.get('join_date', datetime.now()).strftime('%Y-%m-%d')}\n\n"
-            
-            # Show favorite sites
-            favorite_sites = user.get('favorite_sites', {})
-            if favorite_sites:
-                mystats_text += "<b>🌐 ғᴀᴠᴏʀɪᴛᴇ sɪᴛᴇs:</b>\n"
-                top_sites = sorted(favorite_sites.items(), key=lambda x: x[1], reverse=True)[:3]
-                for site, count in top_sites:
-                    mystats_text += f"• {site}: {count:,}\n"
-                mystats_text += "\n"
-            
-            # Show recent downloads
-            if history:
-                mystats_text += "<b>📋 ʀᴇᴄᴇɴᴛ ᴅᴏᴡɴʟᴏᴀᴅs:</b>\n"
-                for item in history[:3]:
-                    date = item.get('download_time', datetime.now()).strftime('%m-%d')
-                    site = item.get('site', 'Unknown')
-                    mystats_text += f"• {date} - {site}\n"
+        # Get current active downloads
+        current_downloads = get_active_download_count(user_id)
+        
+        mystats_text = f"<b>📊 ʏᴏᴜʀ sᴛᴀᴛɪsᴛɪᴄs</b>\n\n"
+        mystats_text += f"<b>👤 ɴᴀᴍᴇ:</b> {username}\n"
+        mystats_text += f"<b>🆔 ᴜsᴇʀ ɪᴅ:</b> <code>{user_id}</code>\n"
+        mystats_text += f"<b>📥 ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {user.get('total_downloads', 0):,}\n"
+        mystats_text += f"<b>💾 ᴛᴏᴛᴀʟ sɪᴢᴇ:</b> {format_bytes(user.get('total_size', 0))}\n"
+        mystats_text += f"<b>🔄 ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {current_downloads}\n"
+        mystats_text += f"<b>🏆 ʀᴀɴᴋ:</b> #{user_rank}\n"
+        mystats_text += f"<b>📅 ᴊᴏɪɴᴇᴅ:</b> {user.get('join_date', datetime.now()).strftime('%Y-%m-%d')}\n\n"
+        
+        # Show favorite sites - fix the sorting issue
+        favorite_sites = user.get('favorite_sites', {})
+        if favorite_sites and isinstance(favorite_sites, dict):
+            try:
+                # Convert to list of tuples and sort by count (value)
+                sites_list = [(site, count) for site, count in favorite_sites.items() if isinstance(count, (int, float))]
+                top_sites = sorted(sites_list, key=lambda x: x[1], reverse=True)[:3]
+                
+                if top_sites:
+                    mystats_text += "<b>🌐 ғᴀᴠᴏʀɪᴛᴇ sɪᴛᴇs:</b>\n"
+                    for site, count in top_sites:
+                        mystats_text += f"• {site}: {count:,}\n"
+                    mystats_text += "\n"
+            except Exception as e:
+                print(f"Error processing favorite sites: {e}")
+        
+        # Show recent downloads
+        if history:
+            mystats_text += "<b>📋 ʀᴇᴄᴇɴᴛ ᴅᴏᴡɴʟᴏᴀᴅs:</b>\n"
+            for item in history[:3]:
+                date = item.get('download_time', datetime.now()).strftime('%m-%d')
+                site = item.get('site', 'Unknown')
+                mystats_text += f"• {date} - {site}\n"
         
         await message.reply_text(mystats_text, parse_mode=ParseMode.HTML)
         
     except Exception as e:
         print(f"❌ Error in mystats command: {e}")
+        import traceback
+        traceback.print_exc()
         await message.reply_text(
             "<b>❌ ᴇʀʀᴏʀ ʟᴏᴀᴅɪɴɢ ʏᴏᴜʀ sᴛᴀᴛɪsᴛɪᴄs</b>",
             parse_mode=ParseMode.HTML
         )
-
 
 
 @Client.on_message(filters.command("history") & filters.private)
@@ -1435,8 +948,8 @@ async def history_command(client: Client, message: Message):
         user_id = message.from_user.id
         username = message.from_user.first_name or message.from_user.username or "Unknown"
         
-        # Just ensure user exists - don't try to update username/first_name
-        user = await get_user(user_id)
+        # Register/update user
+        await register_new_user(user_id, username, message.from_user.first_name or "")
         
         # Get download history from database
         history = await get_user_download_history(user_id, 20)
@@ -1450,23 +963,12 @@ async def history_command(client: Client, message: Message):
             )
             return
         
-        # Format file size helper
-        def format_size(size_bytes):
-            if size_bytes == 0:
-                return "0 B"
-            size_names = ["B", "KB", "MB", "GB", "TB"]
-            import math
-            i = int(math.floor(math.log(size_bytes, 1024)))
-            p = math.pow(1024, i)
-            s = round(size_bytes / p, 2)
-            return f"{s} {size_names[i]}"
-        
         history_text = f"<b>📋 ʏᴏᴜʀ ᴅᴏᴡɴʟᴏᴀᴅ ʜɪsᴛᴏʀʏ</b>\n\n"
         
         for i, item in enumerate(history, 1):
             date = item.get('download_time', datetime.now()).strftime('%Y-%m-%d %H:%M')
             site = item.get('site', 'Unknown')
-            file_size = format_size(item.get('file_size', 0))
+            file_size = format_bytes(item.get('file_size', 0))
             file_type = item.get('file_type', 'unknown')
             file_name = item.get('file_name', 'Unknown File')
             
@@ -1492,7 +994,7 @@ async def history_command(client: Client, message: Message):
         # Add summary at the end
         total_downloads = len(history)
         total_size = sum(item.get('file_size', 0) for item in history)
-        history_text += f"<b>📊 sᴜᴍᴍᴀʀʏ:</b> {total_downloads} downloads • {format_size(total_size)}"
+        history_text += f"<b>📊 sᴜᴍᴍᴀʀʏ:</b> {total_downloads} downloads • {format_bytes(total_size)}"
         
         await message.reply_text(history_text, parse_mode=ParseMode.HTML)
         
@@ -1510,8 +1012,8 @@ async def leaderboard_command(client: Client, message: Message):
         user_id = message.from_user.id
         username = message.from_user.first_name or message.from_user.username or "Unknown"
         
-        # Just ensure user exists - don't try to update username/first_name
-        user = await get_user(user_id)
+        # Register/update user
+        await register_new_user(user_id, username, message.from_user.first_name or "")
         
         # Get top users from database
         top_users = await get_top_users(10)
@@ -1529,17 +1031,6 @@ async def leaderboard_command(client: Client, message: Message):
         user_rank = await get_user_rank(user_id)
         current_user = await get_user(user_id)
         
-        # Format file size helper
-        def format_size(size_bytes):
-            if size_bytes == 0:
-                return "0 B"
-            size_names = ["B", "KB", "MB", "GB", "TB"]
-            import math
-            i = int(math.floor(math.log(size_bytes, 1024)))
-            p = math.pow(1024, i)
-            s = round(size_bytes / p, 2)
-            return f"{s} {size_names[i]}"
-        
         leaderboard_text = f"<b>🏆 ᴛᴏᴘ ᴅᴏᴡɴʟᴏᴀᴅᴇʀs</b>\n\n"
         
         medals = ["🥇", "🥈", "🥉"]
@@ -1547,7 +1038,7 @@ async def leaderboard_command(client: Client, message: Message):
         for i, user in enumerate(top_users, 1):
             username_display = user.get('username', user.get('first_name', 'Unknown'))
             downloads = user.get('total_downloads', 0)
-            total_size = format_size(user.get('total_size', 0))
+            total_size = format_bytes(user.get('total_size', 0))
             
             # Truncate long usernames
             if len(username_display) > 15:
@@ -1567,7 +1058,7 @@ async def leaderboard_command(client: Client, message: Message):
         if user_rank > 10:
             username_display = current_user.get('username', current_user.get('first_name', 'You'))
             downloads = current_user.get('total_downloads', 0)
-            total_size = format_size(current_user.get('total_size', 0))
+            total_size = format_bytes(current_user.get('total_size', 0))
             
             leaderboard_text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
             leaderboard_text += f"<b>➤ #{user_rank} {username_display}</b>\n"
@@ -1586,555 +1077,389 @@ async def leaderboard_command(client: Client, message: Message):
             parse_mode=ParseMode.HTML
         )
 
-
-# Helper function to get top users from database
-async def get_top_users(limit: int = 10):
-    """Get top users by download count"""
+@Client.on_message(filters.command("clearall") & filters.private)
+async def clear_all_downloads_command(client: Client, message: Message):
+    """Clear all active downloads for user (emergency command)"""
     try:
-        users = []
-        async for user in database.user_data.find({}).sort('total_downloads', -1).limit(limit):
-            users.append(user)
-        return users
-    except Exception as e:
-        print(f"❌ Error getting top users: {e}")
-        return []
-
-# Enhanced function to get user download history with better data
-async def get_user_download_history(user_id: int, limit: int = 10):
-    """Get user's download history with enhanced data"""
-    try:
-        history = []
-        async for entry in database.download_history.find({'user_id': user_id}).sort('download_time', -1).limit(limit):
-            history.append(entry)
-        return history
-    except Exception as e:
-        print(f"❌ Error getting download history for user {user_id}: {e}")
-        return []
-
-
-@Client.on_message(filters.command("fix_dumps") & filters.create(check_admin))
-async def fix_dump_channels(client: Client, message: Message):
-    """Fix dump channels by forcing the bot to meet them"""
-    status_msg = await message.reply_text(
-        "<b>🔄 ғɪxɪɴɢ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟs...</b>",
-        parse_mode=ParseMode.HTML
-    )
-    
-    results = []
-    
-    for i, dump_id in enumerate(DUMP_CHAT_IDS, 1):
-        try:
-            # Method 1: Try to get chat directly
-            try:
-                chat = await client.get_chat(dump_id)
-                results.append(f"✅ ᴄʜᴀɴɴᴇʟ {i}: ғɪxᴇᴅ ᴠɪᴀ ɢᴇᴛ_ᴄʜᴀᴛ - {chat.title}")
-                continue
-            except:
-                pass
-            
-            # Method 2: Send test message
-            try:
-                test_msg = await client.send_message(
-                    dump_id,
-                    "🔧 ʙᴏᴛ ɪɴɪᴛɪᴀʟɪᴢᴀᴛɪᴏɴ ᴛᴇsᴛ - ᴛʜɪs ᴍᴇssᴀɢᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ",
-                    disable_notification=True
-                )
-                await test_msg.delete()
-                
-                chat = await client.get_chat(dump_id)
-                results.append(f"✅ ᴄʜᴀɴɴᴇʟ {i}: ғɪxᴇᴅ ᴠɪᴀ ᴛᴇsᴛ ᴍᴇssᴀɢᴇ - {chat.title}")
-                continue
-            except Exception as e2:
-                results.append(f"❌ ᴄʜᴀɴɴᴇʟ {i}: ᴛᴇsᴛ ᴍᴇssᴀɢᴇ ғᴀɪʟᴇᴅ - {str(e2)}")
-            
-            # Method 3: Try resolve_peer
-            try:
-                await client.resolve_peer(dump_id)
-                chat = await client.get_chat(dump_id)
-                results.append(f"✅ ᴄʜᴀɴɴᴇʟ {i}: ғɪxᴇᴅ ᴠɪᴀ ʀᴇsᴏʟᴠᴇ_ᴘᴇᴇʀ - {chat.title}")
-                continue
-            except Exception as e3:
-                results.append(f"❌ ᴄʜᴀɴɴᴇʟ {i}: ʀᴇsᴏʟᴠᴇ ᴘᴇᴇʀ ғᴀɪʟᴇᴅ - {str(e3)}")
-                
-        except Exception as main_error:
-            results.append(f"❌ ᴄʜᴀɴɴᴇʟ {i} ({dump_id}): {str(main_error)}")
-    
-    result_text = "<b>🔧 ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟ ғɪx ʀᴇsᴜʟᴛs:</b>\n\n" + "\n".join(results)
-    await status_msg.edit_text(result_text, parse_mode=ParseMode.HTML)
-
-@Client.on_message(filters.command("check_dumps"))
-async def check_dump_channels(client: Client, message: Message):
-    """Check the status of all dump channels"""
-    if not DUMP_CHAT_IDS:
-        await message.reply_text(
-            "<b>❌ ɴᴏ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟs ᴄᴏɴғɪɢᴜʀᴇᴅ!</b>",
-            parse_mode=ParseMode.HTML
-        )
-        return
-    
-    status_text = "<b>🔍 ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟ sᴛᴀᴛᴜs ᴄʜᴇᴄᴋ</b>\n\n"
-    
-    for i, dump_id in enumerate(DUMP_CHAT_IDS, 1):
-        try:
-            # Get chat info
-            chat_info = await client.get_chat(dump_id)
-            chat_title = chat_info.title or "Unknown"
-            
-            # Check bot membership
-            bot_member = await client.get_chat_member(dump_id, client.me.id)
-            bot_status = bot_member.status
-            
-            if bot_status in ["administrator", "creator"]:
-                status_emoji = "✅"
-                status_desc = f"ᴀᴅᴍɪɴ ({bot_status})"
-            elif bot_status == "member":
-                status_emoji = "⚠️"
-                status_desc = "ᴍᴇᴍʙᴇʀ (ʟɪᴍɪᴛᴇᴅ)"
-            else:
-                status_emoji = "❌"
-                status_desc = f"ʀᴇsᴛʀɪᴄᴛᴇᴅ ({bot_status})"
-            
-            status_text += (
-                f"{status_emoji} <b>ᴄʜᴀɴɴᴇʟ {i}</b>\n"
-                f"├ <b>ᴛɪᴛʟᴇ:</b> {chat_title}\n"
-                f"├ <b>ɪᴅ:</b> <code>{dump_id}</code>\n"
-                f"└ <b>sᴛᴀᴛᴜs:</b> {status_desc}\n\n"
-            )
-            
-        except Exception as e:
-            status_text += (
-                f"❌ <b>ᴄʜᴀɴɴᴇʟ {i}</b>\n"
-                f"├ <b>ɪᴅ:</b> <code>{dump_id}</code>\n"
-                f"└ <b>ᴇʀʀᴏʀ:</b> {str(e)}\n\n"
-            )
-    
-    await message.reply_text(status_text, parse_mode=ParseMode.HTML)
-
-@Client.on_message(filters.command("force_meet") & filters.create(check_admin))
-async def force_meet_channels(client: Client, message: Message):
-    """Force the bot to meet channels using alternative methods"""
-    args = message.text.split()[1:]
-    if not args:
-        await message.reply_text(
-            "<b>ᴜsᴀɢᴇ:</b> <code>/force_meet &lt;channel_id1&gt; &lt;channel_id2&gt; ...</code>",
-            parse_mode=ParseMode.HTML
-        )
-        return
-    
-    results = []
-    
-    for channel_id in args:
-        try:
-            channel_id = int(channel_id)
-            
-            # Try multiple methods
-            methods = [
-                ("ɢᴇᴛ_ᴄʜᴀᴛ", lambda: client.get_chat(channel_id)),
-                ("ʀᴇsᴏʟᴠᴇ_ᴘᴇᴇʀ", lambda: client.resolve_peer(channel_id)),
-                ("ɢᴇᴛ_ᴄʜᴀᴛ_ᴍᴇᴍʙᴇʀ", lambda: client.get_chat_member(channel_id, client.me.id)),
-            ]
-            
-            success = False
-            for method_name, method_func in methods:
-                try:
-                    await method_func()
-                    results.append(f"✅ {channel_id}: sᴜᴄᴄᴇss ᴠɪᴀ {method_name}")
-                    success = True
-                    break
-                except Exception:
-                    continue
-            
-            if not success:
-                results.append(f"❌ {channel_id}: ᴀʟʟ ᴍᴇᴛʜᴏᴅs ғᴀɪʟᴇᴅ")
-                
-        except ValueError:
-            results.append(f"❌ {channel_id}: ɪɴᴠᴀʟɪᴅ ᴄʜᴀɴɴᴇʟ ɪᴅ ғᴏʀᴍᴀᴛ")
-        except Exception as e:
-            results.append(f"❌ {channel_id}: {str(e)}")
-    
-    result_text = "<b>🔧 ғᴏʀᴄᴇ ᴍᴇᴇᴛ ʀᴇsᴜʟᴛs:</b>\n\n" + "\n".join(results)
-    await message.reply_text(result_text, parse_mode=ParseMode.HTML)
-
-@Client.on_message(filters.command("reset_stats") & filters.create(check_admin))
-async def reset_stats_command(client: Client, message: Message):
-    """Reset all statistics (admin only)"""
-    try:
-        # Create backup
-        stats = load_stats()
-        backup_file = f"stats_backup_{int(time.time())}.json"
+        user_id = message.from_user.id
         
-        with open(backup_file, 'w') as f:
-            json.dump(stats, f, indent=2)
-        
-        # Reset stats
-        new_stats = {
-            "total_downloads": 0,
-            "users": {},
-            "sites": {},
-            "daily_stats": {},
-            "file_types": {}
-        }
-        
-        save_stats(new_stats)
-        
-        await message.reply_text(
-            f"<b>✅ sᴛᴀᴛɪsᴛɪᴄs ʀᴇsᴇᴛ!</b>\n\n"
-            f"<b>📁 ʙᴀᴄᴋᴜᴘ sᴀᴠᴇᴅ:</b> <code>{backup_file}</code>\n"
-            f"<b>🔄 ᴀʟʟ sᴛᴀᴛs ʜᴀᴠᴇ ʙᴇᴇɴ ʀᴇsᴇᴛ</b>",
-            parse_mode=ParseMode.HTML
-        )
-        
-    except Exception as e:
-        print(f"❌ Error resetting stats: {e}")
-        await message.reply_text(
-            "<b>❌ ᴇʀʀᴏʀ ʀᴇsᴇᴛᴛɪɴɢ sᴛᴀᴛɪsᴛɪᴄs</b>",
-            parse_mode=ParseMode.HTML
-        )
-
-@Client.on_message(filters.command("broadcast") & filters.private & filters.create(check_admin))
-async def broadcast_command(client: Client, message: Message):
-    """Broadcast message to all users (admin only)"""
-    try:
-        # Get message to broadcast
-        if len(message.command) < 2:
+        if user_id not in active_downloads or not active_downloads[user_id]:
             await message.reply_text(
-                "<b>📢 ʙʀᴏᴀᴅᴄᴀsᴛ</b>\n\n"
-                "<b>ᴜsᴀɢᴇ:</b> <code>/broadcast &lt;message&gt;</code>\n\n"
-                "<b>ᴇxᴀᴍᴘʟᴇ:</b>\n"
-                "<code>/broadcast Hello everyone! Bot is updated.</code>",
+                "❌ <b>ɴᴏ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs ғᴏᴜɴᴅ!</b>",
                 parse_mode=ParseMode.HTML
             )
             return
         
-        broadcast_text = message.text.split(None, 1)[1]
+        # Get count before clearing
+        download_count = len(active_downloads[user_id])
         
-        # Get all users from database
-        all_users = await get_all_users()
+        # Clear all downloads for user
+        for tracker in active_downloads[user_id]:
+            cleanup_files(f"./downloads/{user_id}_{tracker.download_id}/")
         
-        if not all_users:
-            await message.reply_text(
-                "<b>❌ ɴᴏ ᴜsᴇʀs ғᴏᴜɴᴅ</b>",
-                parse_mode=ParseMode.HTML
-            )
-            return
+        # Remove from active downloads
+        del active_downloads[user_id]
         
-        # Start broadcasting
-        status_msg = await message.reply_text(
-            f"<b>📢 sᴛᴀʀᴛɪɴɢ ʙʀᴏᴀᴅᴄᴀsᴛ</b>\n\n"
-            f"<b>👥 ᴛᴏᴛᴀʟ ᴜsᴇʀs:</b> {len(all_users):,}\n"
-            f"<b>📤 sᴇɴᴛ:</b> 0\n"
-            f"<b>❌ ғᴀɪʟᴇᴅ:</b> 0\n"
-            f"<b>⏳ sᴛᴀᴛᴜs:</b> sᴇɴᴅɪɴɢ...",
-            parse_mode=ParseMode.HTML
-        )
-        
-        sent_count = 0
-        failed_count = 0
-        
-        for i, user in enumerate(all_users):
-            try:
-                user_id = user.get('_id')
-                if user_id:
-                    await client.send_message(
-                        chat_id=user_id,
-                        text=f"<b>📢 ʙʀᴏᴀᴅᴄᴀsᴛ ᴍᴇssᴀɢᴇ</b>\n\n{broadcast_text}",
-                        parse_mode=ParseMode.HTML
-                    )
-                    sent_count += 1
-                else:
-                    failed_count += 1
-                    
-            except Exception as e:
-                failed_count += 1
-                print(f"❌ Failed to send broadcast to {user_id}: {e}")
-            
-            # Update status every 10 messages
-            if (i + 1) % 10 == 0:
-                try:
-                    await status_msg.edit_text(
-                        f"<b>📢 ʙʀᴏᴀᴅᴄᴀsᴛɪɴɢ</b>\n\n"
-                        f"<b>👥 ᴛᴏᴛᴀʟ ᴜsᴇʀs:</b> {len(all_users):,}\n"
-                        f"<b>📤 sᴇɴᴛ:</b> {sent_count:,}\n"
-                        f"<b>❌ ғᴀɪʟᴇᴅ:</b> {failed_count:,}\n"
-                        f"<b>⏳ ᴘʀᴏɢʀᴇss:</b> {((i + 1) / len(all_users) * 100):.1f}%",
-                        parse_mode=ParseMode.HTML
-                    )
-                except:
-                    pass
-            
-            # Small delay to avoid rate limiting
-            await asyncio.sleep(0.05)
-        
-        # Final status
-        await status_msg.edit_text(
-            f"<b>✅ ʙʀᴏᴀᴅᴄᴀsᴛ ᴄᴏᴍᴘʟᴇᴛᴇᴅ!</b>\n\n"
-            f"<b>👥 ᴛᴏᴛᴀʟ ᴜsᴇʀs:</b> {len(all_users):,}\n"
-            f"<b>📤 sᴇɴᴛ:</b> {sent_count:,}\n"
-            f"<b>❌ ғᴀɪʟᴇᴅ:</b> {failed_count:,}\n"
-            f"<b>📊 sᴜᴄᴄᴇss ʀᴀᴛᴇ:</b> {(sent_count / len(all_users) * 100):.1f}%",
-            parse_mode=ParseMode.HTML
-        )
-        
-    except Exception as e:
-        print(f"❌ Error in broadcast command: {e}")
         await message.reply_text(
-            "<b>❌ ᴇʀʀᴏʀ ᴅᴜʀɪɴɢ ʙʀᴏᴀᴅᴄᴀsᴛ</b>",
+            f"✅ <b>ᴀʟʟ ᴅᴏᴡɴʟᴏᴀᴅs ᴄʟᴇᴀʀᴇᴅ!</b>\n\n"
+            f"<b>📊 ᴄʟᴇᴀʀᴇᴅ:</b> {download_count} ᴅᴏᴡɴʟᴏᴀᴅs\n"
+            f"<b>🗑️ ғɪʟᴇs:</b> ᴄʟᴇᴀɴᴇᴅ ᴜᴘ",
+            parse_mode=ParseMode.HTML
+        )
+        
+        print(f"🧹 Cleared all downloads for user {user_id} ({download_count} downloads)")
+        
+    except Exception as e:
+        print(f"❌ Error in clearall command: {e}")
+        await message.reply_text(
+            "❌ <b>ᴇʀʀᴏʀ ᴄʟᴇᴀʀɪɴɢ ᴅᴏᴡɴʟᴏᴀᴅs!</b>",
             parse_mode=ParseMode.HTML
         )
 
-# Add this import at the top
-from database import get_watermark_settings, update_watermark_settings
-
-@Client.on_message(filters.command("watermark") & filters.private & filters.create(check_admin))
-async def watermark_command(client: Client, message: Message):
-    """Manage watermark settings (admin only)"""
+@Client.on_message(filters.command("speedtest") & filters.private)
+async def speedtest_command(client: Client, message: Message):
+    """Test bot response speed"""
     try:
-        args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+        import time
+        start_time = time.time()
         
-        if not args:
-            # Show current settings
-            settings = await get_watermark_settings()
-            
-            settings_text = (
-                "<b>🎨 ᴡᴀᴛᴇʀᴍᴀʀᴋ sᴇᴛᴛɪɴɢs</b>\n\n"
-                f"<b>📊 sᴛᴀᴛᴜs:</b> {'✅ ᴇɴᴀʙʟᴇᴅ' if settings.get('enabled') else '❌ ᴅɪsᴀʙʟᴇᴅ'}\n"
-                f"<b>📝 ᴛᴇxᴛ:</b> {settings.get('text', 'N/A')}\n"
-                f"<b>📍 ᴘᴏsɪᴛɪᴏɴ:</b> {settings.get('position', 'N/A')}\n"
-                f"<b>📏 ғᴏɴᴛ sɪᴢᴇ:</b> {settings.get('font_size', 'N/A')}\n"
-                f"<b>🎨 ᴄᴏʟᴏʀ:</b> {settings.get('color', 'N/A')}\n\n"
-                "<b>💡 ᴄᴏᴍᴍᴀɴᴅs:</b>\n"
-                "• <code>/watermark on/off</code> - ᴛᴏɢɢʟᴇ\n"
-                "• <code>/watermark text &lt;text&gt;</code> - sᴇᴛ ᴛᴇxᴛ\n"
-                "• <code>/watermark position &lt;pos&gt;</code> - sᴇᴛ ᴘᴏsɪᴛɪᴏɴ\n"
-                "• <code>/watermark size &lt;size&gt;</code> - sᴇᴛ sɪᴢᴇ"
-            )
-            
-            await message.reply_text(settings_text, parse_mode=ParseMode.HTML)
-            return
+        # Send initial message
+        sent_message = await message.reply_text("🏃‍♂️ ᴛᴇsᴛɪɴɢ sᴘᴇᴇᴅ...")
         
-        command = args[0].lower()
+        # Calculate response time
+        end_time = time.time()
+        response_time = (end_time - start_time) * 1000  # Convert to milliseconds
         
-        if command in ['on', 'enable']:
-            await update_watermark_settings({'enabled': True})
-            await message.reply_text("<b>✅ ᴡᴀᴛᴇʀᴍᴀʀᴋ ᴇɴᴀʙʟᴇᴅ!</b>", parse_mode=ParseMode.HTML)
-            
-        elif command in ['off', 'disable']:
-            await update_watermark_settings({'enabled': False})
-            await message.reply_text("<b>❌ ᴡᴀᴛᴇʀᴍᴀʀᴋ ᴅɪsᴀʙʟᴇᴅ!</b>", parse_mode=ParseMode.HTML)
-            
-        elif command == 'text' and len(args) > 1:
-            new_text = ' '.join(args[1:])
-            await update_watermark_settings({'text': new_text})
-            await message.reply_text(f"<b>✅ ᴡᴀᴛᴇʀᴍᴀʀᴋ ᴛᴇxᴛ sᴇᴛ ᴛᴏ:</b> {new_text}", parse_mode=ParseMode.HTML)
-            
-        elif command == 'position' and len(args) > 1:
-            position = args[1].lower()
-            valid_positions = ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center', 'top-center', 'bottom-center']
-            
-            if position in valid_positions:
-                await update_watermark_settings({'position': position})
-                await message.reply_text(f"<b>✅ ᴡᴀᴛᴇʀᴍᴀʀᴋ ᴘᴏsɪᴛɪᴏɴ sᴇᴛ ᴛᴏ:</b> {position}", parse_mode=ParseMode.HTML)
-            else:
-                await message.reply_text(f"<b>❌ ɪɴᴠᴀʟɪᴅ ᴘᴏsɪᴛɪᴏɴ!</b>\n\nᴠᴀʟɪᴅ: {', '.join(valid_positions)}", parse_mode=ParseMode.HTML)
-                
-        elif command == 'size' and len(args) > 1:
-            try:
-                size = int(args[1])
-                if 12 <= size <= 72:
-                    await update_watermark_settings({'font_size': size})
-                    await message.reply_text(f"<b>✅ ᴡᴀᴛᴇʀᴍᴀʀᴋ sɪᴢᴇ sᴇᴛ ᴛᴏ:</b> {size}", parse_mode=ParseMode.HTML)
-                else:
-                    await message.reply_text("<b>❌ sɪᴢᴇ ᴍᴜsᴛ ʙᴇ ʙᴇᴛᴡᴇᴇɴ 12-72!</b>", parse_mode=ParseMode.HTML)
-            except ValueError:
-                await message.reply_text("<b>❌ ɪɴᴠᴀʟɪᴅ sɪᴢᴇ ɴᴜᴍʙᴇʀ!</b>", parse_mode=ParseMode.HTML)
-        else:
-            await message.reply_text("<b>❌ ɪɴᴠᴀʟɪᴅ ᴄᴏᴍᴍᴀɴᴅ!</b>\n\nᴜsᴇ <code>/watermark</code> ᴛᴏ sᴇᴇ ᴀᴠᴀɪʟᴀʙʟᴇ ᴏᴘᴛɪᴏɴs.", parse_mode=ParseMode.HTML)
+        # Get system stats
+        user_id = message.from_user.id
+        total_active = sum(len(downloads) for downloads in active_downloads.values())
+        user_active = get_active_download_count(user_id)
+        
+        # Update with final response
+        speed_text = (
+            f"🏃‍♂️ <b>sᴘᴇᴇᴅ ᴛᴇsᴛ ʀᴇsᴜʟᴛs</b>\n\n"
+            f"⚡ <b>ʀᴇsᴘᴏɴsᴇ ᴛɪᴍᴇ:</b> <code>{response_time:.2f}ᴍs</code>\n"
+            f"🔄 <b>ʏᴏᴜʀ ᴀᴄᴛɪᴠᴇ:</b> {user_active} ᴅᴏᴡɴʟᴏᴀᴅs\n"
+            f"🌐 <b>ᴛᴏᴛᴀʟ ᴀᴄᴛɪᴠᴇ:</b> {total_active} ᴅᴏᴡɴʟᴏᴀᴅs\n"
+            f"🤖 <b>sᴛᴀᴛᴜs:</b> {'🟢 ᴇxᴄᴇʟʟᴇɴᴛ' if response_time < 100 else '🟡 ɢᴏᴏᴅ' if response_time < 500 else '🔴 sʟᴏᴡ'}"
+        )
+        
+        await sent_message.edit_text(speed_text, parse_mode=ParseMode.HTML)
+        print(f"🏃‍♂️ SPEEDTEST: {user_id} - {response_time:.2f}ms")
         
     except Exception as e:
-        print(f"❌ Error in watermark command: {e}")
-        await message.reply_text("<b>❌ ᴇʀʀᴏʀ ᴍᴀɴᴀɢɪɴɢ ᴡᴀᴛᴇʀᴍᴀʀᴋ sᴇᴛᴛɪɴɢs!</b>", parse_mode=ParseMode.HTML)
+        print(f"❌ Error in speedtest command: {e}")
+        await message.reply_text(
+            "❌ <b>sᴘᴇᴇᴅ ᴛᴇsᴛ ғᴀɪʟᴇᴅ!</b>", 
+            parse_mode=ParseMode.HTML
+        )
 
-@Client.on_message(filters.command("logs") & filters.private & filters.create(check_admin))
-async def logs_command(client: Client, message: Message):
-    """Send recent logs to admin"""
+# Admin commands for managing downloads
+@Client.on_message(filters.command("globalstats") & filters.private)
+async def global_stats_command(client: Client, message: Message):
+    """Show global download statistics (Admin only)"""
     try:
-        # Get recent active downloads info
-        logs_text = "<b>📋 ʙᴏᴛ ʟᴏɢs</b>\n\n"
+        user_id = message.from_user.id
         
+        # Check if user is admin (you can define ADMIN_IDS in config)
+        ADMIN_IDS = [7560922302]  # Add your admin IDs here
+        if user_id not in ADMIN_IDS:
+            await message.reply_text("❌ <b>ᴀᴅᴍɪɴ ᴏɴʟʏ ᴄᴏᴍᴍᴀɴᴅ!</b>", parse_mode=ParseMode.HTML)
+            return
+        
+        # Get global stats
+        total_active = sum(len(downloads) for downloads in active_downloads.values())
+        total_users_with_downloads = len(active_downloads)
+        
+        # Get database stats
+        stats = await get_stats()
+        user_count = await get_user_count()
+        
+        global_text = (
+            f"<b>🌐 ɢʟᴏʙᴀʟ sᴛᴀᴛɪsᴛɪᴄs</b>\n\n"
+            f"<b>📊 ᴅᴀᴛᴀʙᴀsᴇ:</b>\n"
+            f"• ᴛᴏᴛᴀʟ ᴜsᴇʀs: {user_count:,}\n"
+            f"• ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs: {stats.get('total_downloads', 0):,}\n\n"
+            f"<b>🔄 ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs:</b>\n"
+            f"• ᴛᴏᴛᴀʟ ᴀᴄᴛɪᴠᴇ: {total_active}\n"
+            f"• ᴀᴄᴛɪᴠᴇ ᴜsᴇʀs: {total_users_with_downloads}\n\n"
+        )
+        
+        # Show per-user breakdown
         if active_downloads:
-            logs_text += f"<b>🔄 ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs ({len(active_downloads)}):</b>\n"
-            for user_id, tracker in active_downloads.items():
-                logs_text += f"• ᴜsᴇʀ {user_id}: {tracker.status}\n"
-            logs_text += "\n"
-        else:
-            logs_text += "<b>✅ ɴᴏ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs</b>\n\n"
+            global_text += "<b>👥 ᴀᴄᴛɪᴠᴇ ᴜsᴇʀs:</b>\n"
+            for uid, downloads in list(active_downloads.items())[:10]:  # Show top 10
+                global_text += f"• {uid}: {len(downloads)} ᴅᴏᴡɴʟᴏᴀᴅs\n"
+            
+            if len(active_downloads) > 10:
+                global_text += f"• ... ᴀɴᴅ {len(active_downloads) - 10} ᴍᴏʀᴇ\n"
         
-        # System info
-        import psutil
-        cpu_percent = psutil.cpu_percent()
-        memory = psutil.virtual_memory()
-        disk = psutil.disk_usage('/')
-        
-        logs_text += f"<b>💻 sʏsᴛᴇᴍ ɪɴғᴏ:</b>\n"
-        logs_text += f"• ᴄᴘᴜ: {cpu_percent}%\n"
-        logs_text += f"• ʀᴀᴍ: {memory.percent}% ({format_bytes(memory.used)}/{format_bytes(memory.total)})\n"
-        logs_text += f"• ᴅɪsᴋ: {disk.percent}% ({format_bytes(disk.used)}/{format_bytes(disk.total)})\n\n"
-        
-        # Dump channels status
-        logs_text += f"<b>📁 ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟs:</b>\n"
-        for i, dump_id in enumerate(DUMP_CHAT_IDS, 1):
-            try:
-                chat = await client.get_chat(dump_id)
-                logs_text += f"• ᴄʜᴀɴɴᴇʟ {i}: ✅ {chat.title}\n"
-            except Exception as e:
-                logs_text += f"• ᴄʜᴀɴɴᴇʟ {i}: ❌ {str(e)[:30]}...\n"
-        
-        await message.reply_text(logs_text, parse_mode=ParseMode.HTML)
+        await message.reply_text(global_text, parse_mode=ParseMode.HTML)
         
     except Exception as e:
-        print(f"❌ Error in logs command: {e}")
+        print(f"❌ Error in globalstats command: {e}")
         await message.reply_text(
-            f"<b>❌ ᴇʀʀᴏʀ ɢᴇᴛᴛɪɴɢ ʟᴏɢs:</b> <code>{str(e)}</code>",
+            "❌ <b>ᴇʀʀᴏʀ ʟᴏᴀᴅɪɴɢ ɢʟᴏʙᴀʟ sᴛᴀᴛs!</b>",
             parse_mode=ParseMode.HTML
         )
 
-@Client.on_message(filters.command("cleanup") & filters.private & filters.create(check_admin))
-async def cleanup_command(client: Client, message: Message):
-    """Clean up temporary files and reset active downloads"""
+@Client.on_message(filters.command("clearuser") & filters.private)
+async def clear_user_downloads_command(client: Client, message: Message):
+    """Clear downloads for specific user (Admin only)"""
     try:
+        user_id = message.from_user.id
+        
+        # Check if user is admin
+        ADMIN_IDS = [7560922302]  # Add your admin IDs here
+        if user_id not in ADMIN_IDS:
+            await message.reply_text("❌ <b>ᴀᴅᴍɪɴ ᴏɴʟʏ ᴄᴏᴍᴍᴀɴᴅ!</b>", parse_mode=ParseMode.HTML)
+            return
+        
+        # Parse command
+        command_parts = message.text.split()
+        if len(command_parts) < 2:
+            await message.reply_text(
+                "<b>📝 ᴜsᴀɢᴇ:</b>\n\n"
+                "<code>/clearuser [user_id]</code>\n\n"
+                "<b>ᴇxᴀᴍᴘʟᴇ:</b>\n"
+                "<code>/clearuser 123456789</code>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        try:
+            target_user_id = int(command_parts[1])
+        except ValueError:
+            await message.reply_text(
+                "❌ <b>ɪɴᴠᴀʟɪᴅ ᴜsᴇʀ ɪᴅ!</b>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        if target_user_id not in active_downloads or not active_downloads[target_user_id]:
+            await message.reply_text(
+                f"❌ <b>ɴᴏ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs ғᴏʀ ᴜsᴇʀ {target_user_id}!</b>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        # Clear downloads for target user
+        download_count = len(active_downloads[target_user_id])
+        
+        for tracker in active_downloads[target_user_id]:
+            cleanup_files(f"./downloads/{target_user_id}_{tracker.download_id}/")
+        
+        del active_downloads[target_user_id]
+        
+        await message.reply_text(
+            f"✅ <b>ᴄʟᴇᴀʀᴇᴅ ᴅᴏᴡɴʟᴏᴀᴅs!</b>\n\n"
+            f"<b>👤 ᴜsᴇʀ:</b> {target_user_id}\n"
+            f"<b>📊 ᴄʟᴇᴀʀᴇᴅ:</b> {download_count} ᴅᴏᴡɴʟᴏᴀᴅs",
+            parse_mode=ParseMode.HTML
+        )
+        
+        print(f"🧹 Admin {user_id} cleared downloads for user {target_user_id}")
+        
+    except Exception as e:
+        print(f"❌ Error in clearuser command: {e}")
+        await message.reply_text(
+            "❌ <b>ᴇʀʀᴏʀ ᴄʟᴇᴀʀɪɴɢ ᴜsᴇʀ ᴅᴏᴡɴʟᴏᴀᴅs!</b>",
+            parse_mode=ParseMode.HTML
+        )
+
+# Cleanup function to run periodically
+async def cleanup_stale_downloads():
+    """Clean up downloads that have been running too long"""
+    try:
+        current_time = time.time()
+        stale_threshold = 3600  # 1 hour
+        
+        users_to_clean = []
+        
+        for user_id, downloads in active_downloads.items():
+            stale_downloads = []
+            
+            for tracker in downloads:
+                if current_time - tracker.start_time > stale_threshold:
+                    stale_downloads.append(tracker)
+            
+            # Remove stale downloads
+            for tracker in stale_downloads:
+                cleanup_files(f"./downloads/{user_id}_{tracker.download_id}/")
+                downloads.remove(tracker)
+                print(f"🧹 Cleaned up stale download {tracker.download_id} for user {user_id}")
+            
+            # Mark empty user lists for removal
+            if not downloads:
+                users_to_clean.append(user_id)
+        
+        # Remove empty user entries
+        for user_id in users_to_clean:
+            del active_downloads[user_id]
+        
+        if users_to_clean or any(stale_downloads for downloads in active_downloads.values()):
+            print(f"🧹 Cleanup completed: {len(users_to_clean)} users cleaned")
+            
+    except Exception as e:
+        print(f"❌ Error in cleanup: {e}")
+
+@Client.on_message(filters.command("cleanup") & filters.private)
+async def cleanup_command(client: Client, message: Message):
+    """Clean up download directories and temporary files (Admin only)"""
+    try:
+        user_id = message.from_user.id
+        
+        # Check if user is admin
+        ADMIN_IDS = [7560922302]  # Add your admin IDs here
+        if user_id not in ADMIN_IDS:
+            await message.reply_text("❌ <b>ᴀᴅᴍɪɴ ᴏɴʟʏ ᴄᴏᴍᴍᴀɴᴅ!</b>", parse_mode=ParseMode.HTML)
+            return
+        
+        # Parse command arguments
+        command_parts = message.text.split()
+        cleanup_type = "all"  # default
+        
+        if len(command_parts) > 1:
+            cleanup_type = command_parts[1].lower()
+        
+        # Send initial status
         status_msg = await message.reply_text(
-            "<b>🧹 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ...</b>",
+            "<b>🧹 sᴛᴀʀᴛɪɴɢ ᴄʟᴇᴀɴᴜᴘ...</b>",
             parse_mode=ParseMode.HTML
         )
         
         cleaned_files = 0
         cleaned_dirs = 0
+        freed_space = 0
         
-        # Clean downloads directory
-        downloads_dir = "./downloads/"
-        if os.path.exists(downloads_dir):
-            for item in os.listdir(downloads_dir):
-                item_path = os.path.join(downloads_dir, item)
-                try:
-                    if os.path.isfile(item_path):
-                        os.remove(item_path)
-                        cleaned_files += 1
-                    elif os.path.isdir(item_path):
-                        import shutil
-                        shutil.rmtree(item_path)
-                        cleaned_dirs += 1
-                except Exception as e:
-                    print(f"❌ Error cleaning {item_path}: {e}")
-        
-        # Clear active downloads
-        active_count = len(active_downloads)
-        active_downloads.clear()
-        
-        # Clean thumbnail files
-        thumb_files = 0
-        for root, dirs, files in os.walk("."):
-            for file in files:
-                if file.startswith("thumb_") and file.endswith(".jpg"):
+        if cleanup_type in ["all", "downloads"]:
+            # Clean download directories
+            downloads_path = "./downloads/"
+            if os.path.exists(downloads_path):
+                for item in os.listdir(downloads_path):
+                    item_path = os.path.join(downloads_path, item)
                     try:
-                        os.remove(os.path.join(root, file))
-                        thumb_files += 1
-                    except:
-                        pass
+                        if os.path.isfile(item_path):
+                            file_size = os.path.getsize(item_path)
+                            os.remove(item_path)
+                            cleaned_files += 1
+                            freed_space += file_size
+                        elif os.path.isdir(item_path):
+                            # Clean directory contents
+                            for root, dirs, files in os.walk(item_path, topdown=False):
+                                for file in files:
+                                    file_path = os.path.join(root, file)
+                                    try:
+                                        file_size = os.path.getsize(file_path)
+                                        os.remove(file_path)
+                                        cleaned_files += 1
+                                        freed_space += file_size
+                                    except Exception as e:
+                                        print(f"Error removing file {file_path}: {e}")
+                                
+                                for dir in dirs:
+                                    dir_path = os.path.join(root, dir)
+                                    try:
+                                        os.rmdir(dir_path)
+                                        cleaned_dirs += 1
+                                    except Exception as e:
+                                        print(f"Error removing dir {dir_path}: {e}")
+                            
+                            # Remove the main directory
+                            try:
+                                os.rmdir(item_path)
+                                cleaned_dirs += 1
+                            except Exception as e:
+                                print(f"Error removing main dir {item_path}: {e}")
+                                
+                    except Exception as e:
+                        print(f"Error processing {item_path}: {e}")
         
-        await status_msg.edit_text(
+        if cleanup_type in ["all", "temp"]:
+            # Clean temporary files
+            temp_patterns = ["*.tmp", "*.temp", "*.part", "*.ytdl"]
+            for pattern in temp_patterns:
+                import glob
+                for temp_file in glob.glob(pattern):
+                    try:
+                        file_size = os.path.getsize(temp_file)
+                        os.remove(temp_file)
+                        cleaned_files += 1
+                        freed_space += file_size
+                    except Exception as e:
+                        print(f"Error removing temp file {temp_file}: {e}")
+        
+        if cleanup_type in ["all", "logs"]:
+            # Clean old log files (if any)
+            log_patterns = ["*.log", "*.log.*"]
+            for pattern in log_patterns:
+                import glob
+                for log_file in glob.glob(pattern):
+                    try:
+                        # Only remove if older than 7 days
+                        if os.path.getmtime(log_file) < time.time() - (7 * 24 * 60 * 60):
+                            file_size = os.path.getsize(log_file)
+                            os.remove(log_file)
+                            cleaned_files += 1
+                            freed_space += file_size
+                    except Exception as e:
+                        print(f"Error removing log file {log_file}: {e}")
+        
+        # Format freed space
+        def format_size(size_bytes):
+            if size_bytes == 0:
+                return "0 B"
+            size_names = ["B", "KB", "MB", "GB", "TB"]
+            import math
+            i = int(math.floor(math.log(size_bytes, 1024)))
+            p = math.pow(1024, i)
+            s = round(size_bytes / p, 2)
+            return f"{s} {size_names[i]}"
+        
+        # Update status with results
+        cleanup_text = (
             f"<b>✅ ᴄʟᴇᴀɴᴜᴘ ᴄᴏᴍᴘʟᴇᴛᴇᴅ!</b>\n\n"
-            f"<b>📁 ғɪʟᴇs ʀᴇᴍᴏᴠᴇᴅ:</b> {cleaned_files}\n"
-            f"<b>📂 ᴅɪʀᴇᴄᴛᴏʀɪᴇs ʀᴇᴍᴏᴠᴇᴅ:</b> {cleaned_dirs}\n"
-            f"<b>🖼️ ᴛʜᴜᴍʙɴᴀɪʟs ʀᴇᴍᴏᴠᴇᴅ:</b> {thumb_files}\n"
-            f"<b>🔄 ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs ᴄʟᴇᴀʀᴇᴅ:</b> {active_count}",
-            parse_mode=ParseMode.HTML
+            f"<b>🗑️ ᴄʟᴇᴀɴᴇᴅ:</b>\n"
+            f"• {cleaned_files:,} ғɪʟᴇs\n"
+            f"• {cleaned_dirs:,} ᴅɪʀᴇᴄᴛᴏʀɪᴇs\n"
+            f"• {format_size(freed_space)} ғʀᴇᴇᴅ\n\n"
+            f"<b>🧹 ᴛʏᴘᴇ:</b> {cleanup_type}\n"
+            f"<b>⏰ ᴛɪᴍᴇ:</b> {datetime.now().strftime('%H:%M:%S')}"
         )
+        
+        await status_msg.edit_text(cleanup_text, parse_mode=ParseMode.HTML)
+        
+        print(f"🧹 Admin {user_id} performed cleanup: {cleaned_files} files, {cleaned_dirs} dirs, {format_size(freed_space)} freed")
         
     except Exception as e:
         print(f"❌ Error in cleanup command: {e}")
+        import traceback
+        traceback.print_exc()
         await message.reply_text(
-            f"<b>❌ ᴄʟᴇᴀɴᴜᴘ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
+            "❌ <b>ᴄʟᴇᴀɴᴜᴘ ғᴀɪʟᴇᴅ!</b>",
             parse_mode=ParseMode.HTML
         )
 
-@Client.on_message(filters.command("restart") & filters.private & filters.create(check_admin))
-async def restart_command(client: Client, message: Message):
-    """Restart the bot (admin only)"""
-    try:
-        await message.reply_text(
-            "<b>🔄 ʀᴇsᴛᴀʀᴛɪɴɢ ʙᴏᴛ...</b>\n\n"
-            "<i>ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ᴀ ғᴇᴡ sᴇᴄᴏɴᴅs...</i>",
-            parse_mode=ParseMode.HTML
-        )
-        
-        # Clear active downloads
-        active_downloads.clear()
-        
-        # Clean up files
-        cleanup_files("./downloads/")
-        
-        # Restart the bot
-        os.execv(sys.executable, ['python'] + sys.argv)
-        
-    except Exception as e:
-        print(f"❌ Error in restart command: {e}")
-        await message.reply_text(
-            f"<b>❌ ʀᴇsᴛᴀʀᴛ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
-            parse_mode=ParseMode.HTML
-        )
+# Start cleanup task
+async def start_cleanup_task():
+    """Start the periodic cleanup task"""
+    while True:
+        try:
+            await asyncio.sleep(1800)  # Run every 30 minutes
+            await cleanup_stale_downloads()
+        except Exception as e:
+            print(f"❌ Cleanup task error: {e}")
+            await asyncio.sleep(300)  # Wait 5 minutes before retrying
 
-# @Client.on_message(filters.command("test") & filters.private & filters.create(check_admin))
-# async def test_command(client: Client, message: Message):
-#     """Test bot functionality (admin only)"""
-#     try:
-#         test_results = []
-        
-#         # Test 1: Database connection
-#         try:
-#             user_count = await get_user_count()
-#             test_results.append(f"✅ ᴅᴀᴛᴀʙᴀsᴇ: {user_count} ᴜsᴇʀs")
-#         except Exception as e:
-#             test_results.append(f"❌ ᴅᴀᴛᴀʙᴀsᴇ: {str(e)[:30]}...")
-        
-#         # Test 2: Dump channels
-#         working_dumps = 0
-#         for i, dump_id in enumerate(DUMP_CHAT_IDS, 1):
-#             try:
-#                 chat = await client.get_chat(dump_id)
-#                 working_dumps += 1
-#             except:
-#                 pass
-        
-#         test_results.append(f"✅ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟs: {working_dumps}/{len(DUMP_CHAT_IDS)} ᴡᴏʀᴋɪɴɢ")
-        
-#         # Test 3: YT-DLP
-#         try:
-#             import yt_dlp
-#             test_results.append("✅ ʏᴛ-ᴅʟᴘ: ɪɴsᴛᴀʟʟᴇᴅ")
-#         except ImportError:
-#             test_results.append("❌ ʏᴛ-ᴅʟᴘ: ɴᴏᴛ ɪɴsᴛᴀʟʟᴇᴅ")
-        
-#         # Test 4: FFmpeg
-#         try:
-#             process = await asyncio.create_subprocess_exec(
-#                 'ffmpeg', '-version',
-#                 stdout=asyncio.subprocess.DEVNULL,
-#                 stderr=asyncio.subprocess.DEVNULL
-#             )
-#             await process.communicate()
-#             if process.returncode == 0:
-#                 test_results.append("✅ ғғᴍᴘᴇɢ: ɪɴsᴛᴀʟʟᴇᴅ")
-#             else:
-#                 test_results.append("❌ ғғᴍᴘᴇɢ: ɴᴏᴛ ᴡᴏʀᴋɪɴɢ")
-#         except:
-#             test_results.append("❌ ғғᴍᴘᴇɢ: ɴᴏᴛ ғᴏᴜɴᴅ")
-        
-#         # Test 5: Watermark settings
-#         try:
-#             watermark_settings = await get_watermark_settings()
-#             status = "ᴇɴᴀʙʟᴇᴅ" if watermark_settings.get('enabled') else "ᴅɪsᴀʙʟᴇᴅ"
-#             test_results.append(f"✅ ᴡᴀᴛᴇʀᴍᴀʀᴋ: {status}")
-#         except Exception as e:
-#             test_results.append(f"❌ ᴡᴀᴛᴇʀᴍᴀʀᴋ: {str(e)[:30]}...")
-        
-#         test_text = "<b>🧪 ʙᴏᴛ ᴛᴇsᴛ ʀᴇsᴜʟᴛs</b>\n\n" + "\n".join(test_results)
+# Initialize cleanup task when bot starts
+asyncio.create_task(start_cleanup_task())
+
+print("✅ Multiple download system initialized!")
+print("📊 Features:")
+print("   • Up to 3 concurrent downloads per user")
+print("   • Unique download IDs for tracking")
+print("   • Progress tracking for each download")
+print("   • File splitting for large files")
+print("   • Database integration for stats")
+print("   • Automatic cleanup of stale downloads")
+print("   • Admin commands for management")

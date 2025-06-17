@@ -361,7 +361,6 @@ async def get_user_download_history(user_id: int, limit: int = 10):
         logging.error(f"Error getting download history for user {user_id}: {e}")
         return []
 
-# Statistics functions
 async def get_stats():
     try:
         stats = await stats_data.find_one({'_id': 'bot_stats'})
@@ -369,25 +368,28 @@ async def get_stats():
             stats = {
                 '_id': 'bot_stats',
                 'total_downloads': 0,
-                'total_file_size': 0,
                 'sites': {},
                 'file_types': {},
                 'daily_stats': {},
-                'top_users': {},
                 'created_at': datetime.now()
             }
             await stats_data.insert_one(stats)
+        
+        # Ensure sites is always a dict with proper structure
+        if 'sites' not in stats:
+            stats['sites'] = {}
+        elif not isinstance(stats['sites'], dict):
+            stats['sites'] = {}
+            
         return stats
     except Exception as e:
         logging.error(f"Error getting stats: {e}")
         return {
             '_id': 'bot_stats',
             'total_downloads': 0,
-            'total_file_size': 0,
             'sites': {},
             'file_types': {},
-            'daily_stats': {},
-            'top_users': {}
+            'daily_stats': {}
         }
 
 async def update_stats(update_data: dict):
