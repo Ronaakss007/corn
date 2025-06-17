@@ -764,7 +764,6 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
         file_name = os.path.basename(file_path)
         
         # Initialize progress tracking variables
-        # Initialize progress tracking variables
         last_update = 0
         upload_start_time = time.time()
         last_uploaded = 0
@@ -784,62 +783,69 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
         
         await status_msg.edit_text(initial_text, parse_mode=ParseMode.HTML)
         
-        # Real-time progress callback with speed calculation
-        def upload_progress(current, total):
-            nonlocal last_update, last_uploaded, upload_start_time
-            try:
-                now = time.time()
-                if now - last_update < 0.5:  # Update every 0.5 seconds
-                    return
-                
-                # Calculate real-time speed
-                time_diff = now - last_update if last_update > 0 else 1
-                bytes_diff = current - last_uploaded
-                current_speed = bytes_diff / time_diff if time_diff > 0 else 0
-                
-                # Calculate average speed
-                total_time = now - upload_start_time
-                avg_speed = current / total_time if total_time > 0 else 0
-                
-                # Calculate ETA
-                remaining_bytes = total - current
-                eta = remaining_bytes / avg_speed if avg_speed > 0 else 0
-                
-                # Update tracking variables
-                last_update = now
-                last_uploaded = current
-                
-                # Calculate percentage and create progress bar
-                percentage = (current / total) * 100 if total > 0 else 0
-                progress_bar = create_progress_bar(percentage)
-                
-                # Create status text with real progress
-                if part_num and total_parts:
-                    status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {part_num}/{total_parts}</b>\n\n"
-                else:
-                    status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴛᴏ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟ</b>\n\n"
-                
-                status_text += (
-                    f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                    f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n\n"
-                    f"<b>📊 ᴘʀᴏɢʀᴇss:</b>\n"
-                    f"<code>{progress_bar}</code> <b>{percentage:.1f}%</b>\n\n"
-                    f"<b>📤 ᴜᴘʟᴏᴀᴅᴇᴅ:</b> {format_bytes(current)} / {format_bytes(total)}\n"
-                    f"<b>⚡ ᴄᴜʀʀᴇɴᴛ sᴘᴇᴇᴅ:</b> {format_bytes(current_speed)}/s\n"
-                    f"<b>📈 ᴀᴠᴇʀᴀɢᴇ sᴘᴇᴇᴅ:</b> {format_bytes(avg_speed)}/s\n"
-                    f"<b>⏱️ ᴇᴛᴀ:</b> {format_time(eta)}"
-                )
-                
-                # Update status message with proper async handling
+        # Create a separate task for progress updates
+        progress_data = {
+            'current': 0,
+            'total': file_size,
+            'last_update': 0,
+            'start_time': upload_start_time,
+            'last_uploaded': 0
+        }
+        
+        # Progress update task that runs independently
+        async def update_progress_task():
+            while progress_data['current'] < progress_data['total']:
                 try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        asyncio.ensure_future(safe_edit_message(status_msg, status_text))
-                except Exception:
-                    pass
-                
-            except Exception:
-                pass
+                    current = progress_data['current']
+                    total = progress_data['total']
+                    
+                    if current == 0:
+                        await asyncio.sleep(1)
+                        continue
+                    
+                    # Calculate speeds and ETA
+                    now = time.time()
+                    total_time = now - progress_data['start_time']
+                    avg_speed = current / total_time if total_time > 0 else 0
+                    
+                    remaining_bytes = total - current
+                    eta = remaining_bytes / avg_speed if avg_speed > 0 else 0
+                    
+                    # Calculate percentage and create progress bar
+                    percentage = (current / total) * 100 if total > 0 else 0
+                    progress_bar = create_progress_bar(percentage)
+                    
+                    # Create status text
+                    if part_num and total_parts:
+                        status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {part_num}/{total_parts}</b>\n\n"
+                    else:
+                        status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴛᴏ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟ</b>\n\n"
+                    
+                    status_text += (
+                        f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+                        f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n\n"
+                        f"<b>📊 ᴘʀᴏɢʀᴇss:</b>\n"
+                        f"<code>{progress_bar}</code> <b>{percentage:.1f}%</b>\n\n"
+                        f"<b>📤 ᴜᴘʟᴏᴀᴅᴇᴅ:</b> {format_bytes(current)} / {format_bytes(total)}\n"
+                        f"<b>📈 ᴀᴠᴇʀᴀɢᴇ sᴘᴇᴇᴅ:</b> {format_bytes(avg_speed)}/s\n"
+                        f"<b>⏱️ ᴇᴛᴀ:</b> {format_time(eta)}"
+                    )
+                    
+                    # Update message
+                    await safe_edit_message(status_msg, status_text)
+                    await asyncio.sleep(2)  # Update every 2 seconds
+                    
+                except Exception as e:
+                    print(f"Progress update error: {e}")
+                    await asyncio.sleep(2)
+        
+        # Simple progress callback that just updates the data
+        def upload_progress(current, total):
+            progress_data['current'] = current
+            progress_data['total'] = total
+        
+        # Start progress update task
+        progress_task = asyncio.create_task(update_progress_task())
         
         # Create caption with metadata - NO INLINE KEYBOARD for dump channels
         metadata = progress_tracker.metadata
@@ -849,16 +855,16 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
             caption = f"<b>📁 {file_name}</b>\n<b>📦 {format_bytes(file_size)}</b>\n\n"
         
         # Add metadata if available
-        if metadata:
-            if metadata.get('title'):
-                caption += f"<b>🎬 ᴛɪᴛʟᴇ:</b> {metadata['title'][:50]}{'...' if len(metadata['title']) > 50 else ''}\n"
-            if metadata.get('duration'):
-                caption += f"<b>⏱️ ᴅᴜʀᴀᴛɪᴏɴ:</b> {metadata['duration_string']}\n"
-            if metadata.get('uploader'):
-                caption += f"<b>👤 ᴜᴘʟᴏᴀᴅᴇʀ:</b> {metadata['uploader'][:30]}{'...' if len(metadata['uploader']) > 30 else ''}\n"
-            caption += "\n"
+        # if metadata:
+        #     if metadata.get('title'):
+        #         caption += f"<b>🎬 ᴛɪᴛʟᴇ:</b> {metadata['title'][:50]}{'...' if len(metadata['title']) > 50 else ''}\n"
+        #     if metadata.get('duration'):
+        #         caption += f"<b>⏱️ ᴅᴜʀᴀᴛɪᴏɴ:</b> {metadata['duration_string']}\n"
+        #     if metadata.get('uploader'):
+        #         caption += f"<b>👤 ᴜᴘʟᴏᴀᴅᴇʀ:</b> {metadata['uploader'][:30]}{'...' if len(metadata['uploader']) > 30 else ''}\n"
+        #     caption += "\n"
         
-        caption += f"<b>🤖 ᴜᴘʟᴏᴀᴅᴇᴅ ʙʏ:</b> @{Config.BOT_USERNAME}"
+        # caption += f"<b>🤖 ᴜᴘʟᴏᴀᴅᴇᴅ ʙʏ:</b> @{Config.BOT_USERNAME}"
         
         # Generate thumbnail for videos
         thumbnail_path = None
@@ -873,79 +879,65 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
         if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
             width, height = await get_video_dimensions(file_path)
         
-        # Upload with retry mechanism and real progress tracking
+        # Upload with retry mechanism
         max_retries = 3
         dump_message = None
         
-        for attempt in range(max_retries):
-            try:
-                if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
-                    # Send as video to DUMP CHANNEL - NO KEYBOARD
-                    dump_message = await upload_client.send_video(
-                        chat_id=dump_id,
-                        video=file_path,
-                        caption=caption,
-                        supports_streaming=True,
-                        thumb=thumbnail_path,
-                        duration=int(metadata.get('duration', 0)) if metadata else 0,
-                        width=width,
-                        height=height,
-                        progress=upload_progress,
-                        parse_mode=ParseMode.HTML
-                    )
-                elif file_path.lower().endswith(('.mp3', '.m4a', '.wav', '.flac', '.ogg')):
-                    # Send as audio to DUMP CHANNEL - NO KEYBOARD
-                    dump_message = await upload_client.send_audio(
-                        chat_id=dump_id,
-                        audio=file_path,
-                        caption=caption,
-                        duration=int(metadata.get('duration', 0)) if metadata else 0,
-                        performer=metadata.get('uploader', 'Unknown') if metadata else 'Unknown',
-                        title=metadata.get('title', file_name) if metadata else file_name,
-                        thumb=thumbnail_path,
-                        progress=upload_progress,
-                        parse_mode=ParseMode.HTML
-                    )
-                else:
-                    # Send as document to DUMP CHANNEL - NO KEYBOARD
-                    dump_message = await upload_client.send_document(
-                        chat_id=dump_id,
-                        document=file_path,
-                        caption=caption,
-                        thumb=thumbnail_path,
-                        progress=upload_progress,
-                        parse_mode=ParseMode.HTML
-                    )
-                break  # Success, exit retry loop
-                
-            except FloodWait as e:
-                if attempt < max_retries - 1:
-                    print(f"⏳ FloodWait: waiting {e.value} seconds...")
-                    await status_msg.edit_text(
-                        f"<b>⏳ ʀᴀᴛᴇ ʟɪᴍɪᴛ ʜɪᴛ</b>\n\n"
-                        f"<b>⏰ ᴡᴀɪᴛɪɴɢ:</b> {e.value} sᴇᴄᴏɴᴅs\n"
-                        f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                        f"<b>🔄 ᴀᴛᴛᴇᴍᴘᴛ:</b> {attempt + 1}/{max_retries}",
-                        parse_mode=ParseMode.HTML
-                    )
-                    await asyncio.sleep(e.value)
-                else:
-                    raise e
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    print(f"❌ Upload attempt {attempt + 1} failed: {e}")
-                    await asyncio.sleep(2)
-                else:
-                    raise e
+        try:
+            if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
+                # Send as video to DUMP CHANNEL - NO KEYBOARD
+                dump_message = await upload_client.send_video(
+                    chat_id=dump_id,
+                    video=file_path,
+                    caption=caption,
+                    supports_streaming=True,
+                    thumb=thumbnail_path,
+                    duration=int(metadata.get('duration', 0)) if metadata else 0,
+                    width=width,
+                    height=height,
+                    progress=upload_progress,
+                    parse_mode=ParseMode.HTML
+                )
+            elif file_path.lower().endswith(('.mp3', '.m4a', '.wav', '.flac', '.ogg')):
+                # Send as audio to DUMP CHANNEL - NO KEYBOARD
+                dump_message = await upload_client.send_audio(
+                    chat_id=dump_id,
+                    audio=file_path,
+                    caption=caption,
+                    duration=int(metadata.get('duration', 0)) if metadata else 0,
+                    performer=metadata.get('uploader', 'Unknown') if metadata else 'Unknown',
+                    title=metadata.get('title', file_name) if metadata else file_name,
+                    thumb=thumbnail_path,
+                    progress=upload_progress,
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                # Send as document to DUMP CHANNEL - NO KEYBOARD
+                dump_message = await upload_client.send_document(
+                    chat_id=dump_id,
+                    document=file_path,
+                    caption=caption,
+                    thumb=thumbnail_path,
+                    progress=upload_progress,
+                    parse_mode=ParseMode.HTML
+                )
         
-        # Clean up thumbnail
-        if thumbnail_path and os.path.exists(thumbnail_path):
-            try:
-                os.remove(thumbnail_path)
-            except:
-                pass
+        except Exception as e:
+            print(f"❌ Upload failed: {e}")
+            raise e
         
-        # Final upload success message with stats
+        finally:
+            # Cancel progress task
+            progress_task.cancel()
+            
+            # Clean up thumbnail
+            if thumbnail_path and os.path.exists(thumbnail_path):
+                try:
+                    os.remove(thumbnail_path)
+                except:
+                    pass
+        
+        # Final upload success message
         if dump_message:
             upload_time = time.time() - upload_start_time
             avg_speed = file_size / upload_time if upload_time > 0 else 0
@@ -970,6 +962,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
             parse_mode=ParseMode.HTML
         )
         return None
+
 
 async def safe_edit_message(message, text):
     """Safely edit message without throwing exceptions"""
