@@ -1,5 +1,4 @@
 import os
-from dotenv import load_dotenv
 
 class Config:
     # Telegram Bot Configuration - Hardcoded
@@ -21,9 +20,10 @@ class Config:
     YT_DLP_QUALITY = "best"
     AUDIO_QUALITY = "192"  # kbps for MP3
     
-    # Database Configuration - Fixed connection string
+    # Database Configuration
     DB_URL = "mongodb+srv://ronaksaini922:NbeuC9FX8baih72p@cluster0.z6bb3.mongodb.net/cornhub?retryWrites=true&w=majority"
     DB_NAME = "cornhub"
+    DATABASE_NAME = "cornhub"  # Added this alias to fix the error
     
     # Dump Channels - Fixed format (integers, not strings)
     DUMP_CHAT_IDS = [-1002519738807, -1002460893841, -1002664225966]
@@ -52,3 +52,38 @@ class Config:
     def is_admin(user_id):
         """Check if user is admin"""
         return user_id in Config.ADMIN_USERS
+    
+    @staticmethod
+    def validate_config():
+        """Validate configuration values"""
+        errors = []
+        
+        if not Config.API_ID:
+            errors.append("API_ID is required")
+        if not Config.API_HASH:
+            errors.append("API_HASH is required")
+        if not Config.BOT_TOKEN:
+            errors.append("BOT_TOKEN is required")
+        if not Config.DB_URL:
+            errors.append("DB_URL is required")
+        if not Config.ADMIN_USERS:
+            errors.append("At least one ADMIN_USER is required")
+            
+        return errors
+    
+    @staticmethod
+    def print_config():
+        """Print configuration summary (without sensitive data)"""
+        print("📋 Configuration Summary:")
+        print(f"   Bot Name: {Config.BOT_NAME}")
+        print(f"   Bot Username: @{Config.BOT_USERNAME}")
+        print(f"   Download Dir: {Config.DOWNLOAD_DIR}")
+        print(f"   Max File Size: {Config.MAX_FILE_SIZE / (1024*1024*1024):.1f} GB")
+        print(f"   YT-DLP Quality: {Config.YT_DLP_QUALITY}")
+        print(f"   Audio Quality: {Config.AUDIO_QUALITY} kbps")
+        print(f"   Database: {Config.DB_NAME}")
+        print(f"   Dump Channels: {len(Config.DUMP_CHAT_IDS)} channels")
+        print(f"   Admin Users: {len(Config.ADMIN_USERS)} users")
+        print(f"   Authorized Users: {'Public' if not Config.AUTHORIZED_USERS else len(Config.AUTHORIZED_USERS)}")
+        print(f"   Flask Port: {Config.FLASK_PORT}")
+        print(f"   Log Level: {Config.LOG_LEVEL}")
