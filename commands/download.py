@@ -150,57 +150,6 @@ def save_stats(stats):
     except Exception as e:
         logging.error(f"Error saving stats: {e}")
 
-def update_download_stats(user_id, username, url, file_size, file_type):
-    """Update download statistics"""
-    try:
-        stats = load_stats()
-        today = datetime.now().strftime("%Y-%m-%d")
-        
-        # Extract domain from URL
-        domain = re.findall(r'https?://(?:www\.)?([^/]+)', url)
-        site = domain[0] if domain else "unknown"
-        
-        # Update total downloads
-        stats["total_downloads"] += 1
-        
-        # Update user stats
-        if str(user_id) not in stats["users"]:
-            stats["users"][str(user_id)] = {
-                "username": username,
-                "downloads": 0,
-                "total_size": 0,
-                "sites": {}
-            }
-        
-        stats["users"][str(user_id)]["downloads"] += 1
-        stats["users"][str(user_id)]["total_size"] += file_size
-        stats["users"][str(user_id)]["username"] = username  # Update username
-        
-        # Update user site stats
-        if site not in stats["users"][str(user_id)]["sites"]:
-            stats["users"][str(user_id)]["sites"][site] = 0
-        stats["users"][str(user_id)]["sites"][site] += 1
-        
-        # Update global site stats
-        if site not in stats["sites"]:
-            stats["sites"][site] = 0
-        stats["sites"][site] += 1
-        
-        # Update daily stats
-        if today not in stats["daily_stats"]:
-            stats["daily_stats"][today] = 0
-        stats["daily_stats"][today] += 1
-        
-        # Update file type stats
-        if file_type not in stats["file_types"]:
-            stats["file_types"][file_type] = 0
-        stats["file_types"][file_type] += 1
-        
-        save_stats(stats)
-        
-    except Exception as e:
-        logging.error(f"Error updating stats: {e}")
-
 def format_bytes(bytes_value):
     """Convert bytes to human readable format"""
     if bytes_value == 0:
@@ -1211,26 +1160,6 @@ async def stats_command(client: Client, message: Message):
             parse_mode=ParseMode.HTML
         )
 
-async def update_download_stats(user_id: int, site: str, file_size: int = 0):
-    """Update download statistics"""
-    try:
-        # Update total downloads
-        await database.stats_data.update_one(
-            {"_id": "bot_stats"},
-            {
-                "$inc": {
-                    "total_downloads": 1,
-                    "total_file_size": file_size,
-                    f"sites.{site}": 1,
-                    f"top_users.{str(user_id)}": 1
-                }
-            },
-            upsert=True
-        )
-        print(f"✅ Updated download stats for user {user_id}, site: {site}, size: {file_size}")
-    except Exception as e:
-        print(f"❌ Error updating download stats: {e}")
-
 async def get_stats():
     """Get bot statistics"""
     try:
@@ -1387,7 +1316,6 @@ async def mystats_command(client: Client, message: Message):
             "<b>❌ ᴇʀʀᴏʀ ʟᴏᴀᴅɪɴɢ ʏᴏᴜʀ sᴛᴀᴛɪsᴛɪᴄs</b>",
             parse_mode=ParseMode.HTML
         )
-
 
 @Client.on_message(filters.command("history") & filters.private)
 async def history_command(client: Client, message: Message):

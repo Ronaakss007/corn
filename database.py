@@ -58,7 +58,61 @@ async def get_settings():
             'FORCE_SUB_CHANNELS': [],
             'REQUEST_SUB_CHANNELS': []
         }
-    
+
+async def update_download_stats(user_id: int, username: str, url: str, file_size: int, file_type: str):
+    """Update download statistics"""
+    try:
+        from urllib.parse import urlparse
+        
+        # Extract site name
+        parsed = urlparse(url)
+        site = parsed.netloc.lower().replace('www.', '')
+        
+        print(f"🔄 Updating stats for user {user_id}: site={site}, size={file_size}, type={file_type}")
+        
+        # Update user stats - separate operations to avoid conflicts
+        await user_data.update_one(
+            {'_id': user_id},
+            {
+                '$inc': {
+                    'total_downloads': 1,
+                    'total_size': file_size,
+                    f'favorite_sites.{site}': 1
+                },
+                '$set': {
+                    'last_activity': datetime.now()
+                }
+            },
+            upsert=True
+        )
+        
+        # Update username separately if provided
+        if username and username.strip():
+            await user_data.update_one(
+                {'_id': user_id},
+                {'$set': {'username': username.strip()}},
+                upsert=True
+            )
+        
+        # Update global stats
+        await increment_stats('total_downloads', 1)
+        await update_site_stats(site)
+        await update_file_type_stats(file_type)
+        await update_daily_stats()
+        
+        # Add to download history
+        await add_download_history(user_id, url, "Downloaded File", file_size, file_type, site)
+        
+        print(f"✅ Successfully updated stats for user {user_id}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error updating download stats for user {user_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 async def remove_join_request(user_id: int, channel_id: int):
     """Remove join request when user joins"""
     try:
