@@ -62,39 +62,25 @@ def split_file(file_path, chunk_size=1.98 * 1024 * 1024 * 1024):  # 1.98GB
         return [file_path]
     
 async def register_new_user(user_id, username, first_name):
-    """Register new user in database only if they don't exist"""
+    """Register new user in database - simplified version to avoid conflicts"""
     try:
-        # Get existing user or create new one
+        # Just ensure user exists in database
         user = await get_user(user_id)
         
-        # Prepare separate update operations to avoid conflicts
-        updates_needed = []
+        # Only update last_activity - don't touch username/first_name to avoid conflicts
+        await user_data.update_one(
+            {'_id': user_id},
+            {'$set': {'last_activity': datetime.now()}},
+            upsert=True
+        )
         
-        # Always update last activity
-        updates_needed.append({'last_activity': datetime.now()})
-        
-        # Check if username needs updating
-        current_username = user.get('username', '') or ''
-        new_username = (username or '').strip()
-        if new_username and current_username != new_username:
-            updates_needed.append({'username': new_username})
-            
-        # Check if first_name needs updating
-        current_first_name = user.get('first_name', '') or ''
-        new_first_name = (first_name or '').strip()
-        if new_first_name and current_first_name != new_first_name:
-            updates_needed.append({'first_name': new_first_name})
-        
-        # Apply updates one by one to avoid conflicts
-        for update_data in updates_needed:
-            await update_user(user_id, update_data)
-            
-        print(f"✅ User {user_id} registered/updated")
+        print(f"✅ User {user_id} activity updated")
         return user
         
     except Exception as e:
-        print(f"❌ Error registering user {user_id}: {e}")
-        return await get_user(user_id)  # Just return the user as-is
+        print(f"❌ Error updating user activity {user_id}: {e}")
+        # Just return the user data without updating
+        return await get_user(user_id)
 
 
 # Get dump channels from config (fixed)
@@ -1183,35 +1169,6 @@ async def get_stats():
             "file_types": {}
         }
 
-async def register_new_user(user_id: int, username: str, first_name: str):
-    """Register new user or update existing user info"""
-    try:
-        await database.user_data.update_one(
-            {"_id": user_id},
-            {
-                "$setOnInsert": {
-                    "_id": user_id,
-                    "username": username,
-                    "first_name": first_name,
-                    "total_downloads": 0,
-                    "total_size": 0,
-                    "favorite_sites": {},
-                    "join_date": datetime.now(),
-                    "last_activity": datetime.now()
-                },
-                "$set": {
-                    "username": username,
-                    "first_name": first_name,
-                    "last_activity": datetime.now()
-                }
-            },
-            upsert=True
-        )
-        return True
-    except Exception as e:
-        print(f"❌ Error registering user {user_id}: {e}")
-        return False
-
 async def get_user(user_id: int):
     """Get user data from database"""
     try:
@@ -1276,18 +1233,29 @@ async def mystats_command(client: Client, message: Message):
         user_id = message.from_user.id
         username = message.from_user.first_name or message.from_user.username or "Unknown"
         
-        # Just ensure user exists - don't try to update username/first_name
+        # Just get user data - no registration needed
         user = await get_user(user_id)
         user_rank = await get_user_rank(user_id)
         
         # Get user's download history
         history = await get_user_download_history(user_id, 5)
         
+        # Format file size helper
+        def format_size(size_bytes):
+            if size_bytes == 0:
+                return "0 B"
+            size_names = ["B", "KB", "MB", "GB", "TB"]
+            import math
+            i = int(math.floor(math.log(size_bytes, 1024)))
+            p = math.pow(1024, i)
+            s = round(size_bytes / p, 2)
+            return f"{s} {size_names[i]}"
+        
         mystats_text = f"<b>📊 ʏᴏᴜʀ sᴛᴀᴛɪsᴛɪᴄs</b>\n\n"
         mystats_text += f"<b>👤 ɴᴀᴍᴇ:</b> {username}\n"
         mystats_text += f"<b>🆔 ᴜsᴇʀ ɪᴅ:</b> <code>{user_id}</code>\n"
         mystats_text += f"<b>📥 ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {user.get('total_downloads', 0):,}\n"
-        mystats_text += f"<b>💾 ᴛᴏᴛᴀʟ sɪᴢᴇ:</b> {format_bytes(user.get('total_size', 0))}\n"
+        mystats_text += f"<b>💾 ᴛᴏᴛᴀʟ sɪᴢᴇ:</b> {format_size(user.get('total_size', 0))}\n"
         mystats_text += f"<b>🏆 ʀᴀɴᴋ:</b> #{user_rank}\n"
         mystats_text += f"<b>📅 ᴊᴏɪɴᴇᴅ:</b> {user.get('join_date', datetime.now()).strftime('%Y-%m-%d')}\n\n"
         
@@ -1316,6 +1284,7 @@ async def mystats_command(client: Client, message: Message):
             "<b>❌ ᴇʀʀᴏʀ ʟᴏᴀᴅɪɴɢ ʏᴏᴜʀ sᴛᴀᴛɪsᴛɪᴄs</b>",
             parse_mode=ParseMode.HTML
         )
+
 
 @Client.on_message(filters.command("history") & filters.private)
 async def history_command(client: Client, message: Message):
@@ -1499,36 +1468,6 @@ async def get_user_download_history(user_id: int, limit: int = 10):
     except Exception as e:
         print(f"❌ Error getting download history for user {user_id}: {e}")
         return []
-
-# Function to register/update user information
-async def register_new_user(user_id: int, username: str, first_name: str):
-    """Register new user or update existing user info"""
-    try:
-        await database.user_data.update_one(
-            {"_id": user_id},
-            {
-                "$setOnInsert": {
-                    "_id": user_id,
-                    "username": username,
-                    "first_name": first_name,
-                    "total_downloads": 0,
-                    "total_size": 0,
-                    "favorite_sites": {},
-                    "join_date": datetime.now(),
-                    "last_activity": datetime.now()
-                },
-                "$set": {
-                    "username": username,
-                    "first_name": first_name,
-                    "last_activity": datetime.now()
-                }
-            },
-            upsert=True
-        )
-        return True
-    except Exception as e:
-        print(f"❌ Error registering user {user_id}: {e}")
-        return False
 
 
 @Client.on_message(filters.command("fix_dumps") & filters.create(check_admin))
