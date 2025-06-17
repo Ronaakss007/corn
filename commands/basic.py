@@ -548,3 +548,111 @@ async def fix_stats_command(client: Client, message: Message):
     except Exception as e:
         print(f"❌ Error fixing stats: {e}")
         await message.reply_text("❌ <b>ᴇʀʀᴏʀ ғɪxɪɴɢ sᴛᴀᴛs</b>", parse_mode=ParseMode.HTML)
+
+
+@Client.on_message(filters.command("clearrequests") & filters.private)
+async def clear_requests_command(client: Client, message: Message):
+    """Clear pending join requests (Admin only)"""
+    try:
+        user_id = message.from_user.id
+        
+        # Check if user is admin
+        if user_id not in ADMINS:
+            await message.reply_text("❌ <b>ʏᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴀᴜᴛʜᴏʀɪᴢᴇᴅ!</b>", parse_mode=ParseMode.HTML)
+            return
+        
+        # Parse command
+        command_parts = message.text.split()
+        
+        if len(command_parts) == 1:
+            # Show usage
+            await message.reply_text(
+                "<b>📝 ᴜsᴀɢᴇ:</b>\n\n"
+                "<code>/clearrequests all</code> - Clear all pending requests\n"
+                "<code>/clearrequests [channel_id]</code> - Clear requests for specific channel\n"
+                "<code>/clearrequests [user_id]</code> - Clear requests for specific user\n"
+                "<code>/clearrequests [user_id] [channel_id]</code> - Clear specific request\n\n"
+                "<b>ᴇxᴀᴍᴘʟᴇs:</b>\n"
+                "<code>/clearrequests all</code>\n"
+                "<code>/clearrequests -1001234567890</code>\n"
+                "<code>/clearrequests 123456789</code>\n"
+                "<code>/clearrequests 123456789 -1001234567890</code>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        if command_parts[1].lower() == "all":
+            # Clear all pending requests
+            from database import join_requests
+            result = await join_requests.delete_many({"status": "pending"})
+            await message.reply_text(
+                f"✅ <b>ᴄʟᴇᴀʀᴇᴅ {result.deleted_count} ᴘᴇɴᴅɪɴɢ ʀᴇǫᴜᴇsᴛs!</b>",
+                parse_mode=ParseMode.HTML
+            )
+            
+        elif len(command_parts) == 2:
+            # Clear requests for specific channel or user
+            target_id = command_parts[1]
+            
+            try:
+                target_id = int(target_id)
+            except ValueError:
+                await message.reply_text("❌ <b>ɪɴᴠᴀʟɪᴅ ɪᴅ ғᴏʀᴍᴀᴛ!</b>", parse_mode=ParseMode.HTML)
+                return
+            
+            from database import join_requests
+            
+            # Check if it's a channel ID (negative) or user ID (positive)
+            if target_id < 0:
+                # Channel ID
+                result = await join_requests.delete_many({
+                    "channel_id": target_id,
+                    "status": "pending"
+                })
+                await message.reply_text(
+                    f"✅ <b>ᴄʟᴇᴀʀᴇᴅ {result.deleted_count} ᴘᴇɴᴅɪɴɢ ʀᴇǫᴜᴇsᴛs ғᴏʀ ᴄʜᴀɴɴᴇʟ {target_id}!</b>",
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                # User ID
+                result = await join_requests.delete_many({
+                    "user_id": target_id,
+                    "status": "pending"
+                })
+                await message.reply_text(
+                    f"✅ <b>ᴄʟᴇᴀʀᴇᴅ {result.deleted_count} ᴘᴇɴᴅɪɴɢ ʀᴇǫᴜᴇsᴛs ғᴏʀ ᴜsᴇʀ {target_id}!</b>",
+                    parse_mode=ParseMode.HTML
+                )
+                
+        elif len(command_parts) == 3:
+            # Clear specific request
+            try:
+                user_id_target = int(command_parts[1])
+                channel_id_target = int(command_parts[2])
+            except ValueError:
+                await message.reply_text("❌ <b>ɪɴᴠᴀʟɪᴅ ɪᴅ ғᴏʀᴍᴀᴛ!</b>", parse_mode=ParseMode.HTML)
+                return
+            
+            from database import join_requests
+            result = await join_requests.delete_many({
+                "user_id": user_id_target,
+                "channel_id": channel_id_target,
+                "status": "pending"
+            })
+            
+            if result.deleted_count > 0:
+                await message.reply_text(
+                    f"✅ <b>ᴄʟᴇᴀʀᴇᴅ ᴘᴇɴᴅɪɴɢ ʀᴇǫᴜᴇsᴛ ғᴏʀ ᴜsᴇʀ {user_id_target} ɪɴ ᴄʜᴀɴɴᴇʟ {channel_id_target}!</b>",
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await message.reply_text(
+                    f"❌ <b>ɴᴏ ᴘᴇɴᴅɪɴɢ ʀᴇǫᴜᴇsᴛ ғᴏᴜɴᴅ ғᴏʀ ᴜsᴇʀ {user_id_target} ɪɴ ᴄʜᴀɴɴᴇʟ {channel_id_target}!</b>",
+                    parse_mode=ParseMode.HTML
+                )
+        else:
+            await message.reply_text("❌ <b>ɪɴᴠᴀʟɪᴅ ᴄᴏᴍᴍᴀɴᴅ ғᴏʀᴍᴀᴛ!</b>", parse_mode=ParseMode.HTML)
+        
+    except Exception as e:
+        print(f"❌ Error in clear requests command: {e}")
+        await message.reply_text("❌ <b>ᴇʀʀᴏʀ ᴄʟᴇᴀʀɪɴɢ ʀᴇǫᴜᴇsᴛs!</b>", parse_mode=ParseMode.HTML)
