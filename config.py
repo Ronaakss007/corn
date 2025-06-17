@@ -21,12 +21,12 @@ class Config:
     YT_DLP_QUALITY = "best"
     AUDIO_QUALITY = "192"  # kbps for MP3
     
-    # Database Configuration
-    DB_URL = "mongodb+srv://ronaksaini922:NbeuC9FX8baih72p@cluster0.z6bb3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-    DATABASE_NAME = "cornhub"
+    # Database Configuration - Fixed connection string
+    DB_URL = "mongodb+srv://ronaksaini922:NbeuC9FX8baih72p@cluster0.z6bb3.mongodb.net/cornhub?retryWrites=true&w=majority"
+    DB_NAME = "cornhub"
     
-    # Dump Channels
-    DUMP_CHAT_IDS = ["-1002519738807", "-1002460893841", "-1002664225966"]
+    # Dump Channels - Fixed format (integers, not strings)
+    DUMP_CHAT_IDS = [-1002519738807, -1002460893841, -1002664225966]
     
     # Authorized Users (optional - leave empty for public bot)
     AUTHORIZED_USERS = []  # Add user IDs: [123456789, 987654321]
@@ -36,6 +36,10 @@ class Config:
     
     # Logging
     LOG_LEVEL = "INFO"
+    
+    # Flask Keep-alive settings
+    FLASK_HOST = "0.0.0.0"
+    FLASK_PORT = 8087
     
     @staticmethod
     def is_authorized(user_id):

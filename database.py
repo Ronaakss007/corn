@@ -2,15 +2,32 @@ import motor.motor_asyncio
 import os
 from datetime import datetime
 import logging
-from config import *
+from config import Config
 
-# Database configuration
-DB_URL = os.environ.get("DB_URL", "mongodb+srv://ronaksaini922:NbeuC9FX8baih72p@cluster0.z6bb3.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
-DB_NAME = os.environ.get("DATABASE_NAME", "cornhub")
 
-# Initialize MongoDB client
-dbclient = motor.motor_asyncio.AsyncIOMotorClient(DB_URL)
-database = dbclient[DB_NAME]
+# Initialize MongoDB client with better error handling
+try:
+    dbclient = motor.motor_asyncio.AsyncIOMotorClient(
+        Config.DB_URL,
+        serverSelectionTimeoutMS=5000,  # 5 second timeout
+        connectTimeoutMS=5000,
+        socketTimeoutMS=5000
+    )
+    database = dbclient[Config.DATABASE_NAME]
+    
+    # Collections
+    user_data = database['users']
+    stats_data = database['stats']
+    download_history = database['download_history']
+    
+    logging.info("✅ Database connection initialized")
+    
+except Exception as e:
+    logging.error(f"❌ Database connection failed: {e}")
+    # Create dummy functions for offline mode
+    user_data = None
+    stats_data = None
+    download_history = None
 
 # Collections
 user_data = database['users']
