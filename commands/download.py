@@ -13,6 +13,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.enums import ParseMode
 from config import Config
+import sys
 # Add this import
 from database import *
 
@@ -43,10 +44,8 @@ async def register_new_user(user_id, username, first_name):
         print(f"❌ Error registering user: {e}")
         return False
 
-
-
-# Get dump channels from environment
-DUMP_CHAT_IDS = os.environ.get('DUMP_CHAT_IDS', '-1002519738807 -1002460893841 -1002664225966').split()
+# Get dump channels from config (fixed)
+DUMP_CHAT_IDS = Config.DUMP_CHAT_IDS
 
 # Global variables to track downloads
 active_downloads = {}
@@ -363,7 +362,6 @@ async def generate_thumbnail(video_path: str, output_path: str, time_position: i
         print(f"❌ Thumbnail generation failed: {e}")
         return None
 
-
 # Add this function to check admin
 def check_admin(_, __, message):
     """Check if user is admin"""
@@ -394,14 +392,14 @@ async def handle_url_message(client: Client, message: Message):
         # Register/update user in database
         await register_new_user(user_id, username, first_name)
         
-        # Check if user already has active download
-        if user_id in active_downloads:
-            await message.reply_text(
-                "<b>❌ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ</b>\n\n"
-                "ʏᴏᴜ ᴀʟʀᴇᴀᴅʏ ʜᴀᴠᴇ ᴀɴ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ! ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ғᴏʀ ɪᴛ ᴛᴏ ᴄᴏᴍᴘʟᴇᴛᴇ.",
-                parse_mode=ParseMode.HTML
-            )
-            return
+        # # Check if user already has active download
+        # if user_id in active_downloads:
+        #     await message.reply_text(
+        #         "<b>❌ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ</b>\n\n"
+        #         "ʏᴏᴜ ᴀʟʀᴇᴀᴅʏ ʜᴀᴠᴇ ᴀɴ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ! ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ғᴏʀ ɪᴛ ᴛᴏ ᴄᴏᴍᴘʟᴇᴛᴇ.",
+        #         parse_mode=ParseMode.HTML
+        #     )
+        #     return
         
         # Continue with existing download logic...
         active_downloads[user_id] = ProgressTracker()
@@ -428,7 +426,6 @@ async def handle_url_message(client: Client, message: Message):
         )
         if message.from_user.id in active_downloads:
             del active_downloads[message.from_user.id]
-
 
 async def download_and_send(client, message, status_msg, url, user_id):
     """Download video and send to user with progress tracking"""
@@ -519,6 +516,15 @@ async def download_and_send(client, message, status_msg, url, user_id):
                     parse_mode=ParseMode.HTML
                 )
                 
+                # Check if dump channels are configured
+                if not DUMP_CHAT_IDS:
+                    await message.reply_text(
+                        "<b>❌ ɴᴏ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟs ᴄᴏɴғɪɢᴜʀᴇᴅ!</b>\n\n"
+                        "ᴄᴏɴᴛᴀᴄᴛ ᴀᴅᴍɪɴ ᴛᴏ sᴇᴛᴜᴘ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟs.",
+                        parse_mode=ParseMode.HTML
+                    )
+                    continue
+                
                 # Upload to first dump channel
                 dump_message = await upload_to_dump(client, file_path, DUMP_CHAT_IDS[0], progress_tracker, status_msg)
                 
@@ -552,11 +558,17 @@ async def download_and_send(client, message, status_msg, url, user_id):
                     
                     username = message.from_user.first_name or message.from_user.username or "Unknown"
                     update_download_stats(user_id, username, url, file_size, file_type)
+                else:
+                    await message.reply_text(
+                        f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ ᴜᴘʟᴏᴀᴅ:</b> {file_name}",
+                        parse_mode=ParseMode.HTML
+                    )
                 
             except Exception as e:
                 print(f"❌ Error processing file {file_path}: {e}")
                 await message.reply_text(
-                    f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇɴᴅ:</b> {os.path.basename(file_path)}",
+                    f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇɴᴅ:</b> {os.path.basename(file_path)}\n\n"
+                    f"<b>ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
                     parse_mode=ParseMode.HTML
                 )
         
@@ -569,7 +581,7 @@ async def download_and_send(client, message, status_msg, url, user_id):
     except Exception as e:
         print(f"❌ Error in download_and_send: {e}")
         await status_msg.edit_text(
-            f"<b>❌ ᴇʀʀᴏʀ:</b> {str(e)}",
+            f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
             parse_mode=ParseMode.HTML
         )
     
@@ -976,7 +988,6 @@ async def leaderboard_command(client: Client, message: Message):
             parse_mode=ParseMode.HTML
         )
 
-
 @Client.on_message(filters.command("fix_dumps") & filters.create(check_admin))
 async def fix_dump_channels(client: Client, message: Message):
     """Fix dump channels by forcing the bot to meet them"""
@@ -1120,7 +1131,6 @@ async def force_meet_channels(client: Client, message: Message):
     result_text = "<b>🔧 ғᴏʀᴄᴇ ᴍᴇᴇᴛ ʀᴇsᴜʟᴛs:</b>\n\n" + "\n".join(results)
     await message.reply_text(result_text, parse_mode=ParseMode.HTML)
 
-
 @Client.on_message(filters.command("reset_stats") & filters.create(check_admin))
 async def reset_stats_command(client: Client, message: Message):
     """Reset all statistics (admin only)"""
@@ -1248,13 +1258,8 @@ async def broadcast_command(client: Client, message: Message):
             parse_mode=ParseMode.HTML
         )
 
-
 # Add this import at the top
 from database import get_watermark_settings, update_watermark_settings
-
-# Add admin check function
-def check_admin(_, __, message):
-    return message.from_user.id in Config.ADMIN_USERS
 
 @Client.on_message(filters.command("watermark") & filters.private & filters.create(check_admin))
 async def watermark_command(client: Client, message: Message):
@@ -1324,3 +1329,188 @@ async def watermark_command(client: Client, message: Message):
     except Exception as e:
         print(f"❌ Error in watermark command: {e}")
         await message.reply_text("<b>❌ ᴇʀʀᴏʀ ᴍᴀɴᴀɢɪɴɢ ᴡᴀᴛᴇʀᴍᴀʀᴋ sᴇᴛᴛɪɴɢs!</b>", parse_mode=ParseMode.HTML)
+
+@Client.on_message(filters.command("logs") & filters.private & filters.create(check_admin))
+async def logs_command(client: Client, message: Message):
+    """Send recent logs to admin"""
+    try:
+        # Get recent active downloads info
+        logs_text = "<b>📋 ʙᴏᴛ ʟᴏɢs</b>\n\n"
+        
+        if active_downloads:
+            logs_text += f"<b>🔄 ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs ({len(active_downloads)}):</b>\n"
+            for user_id, tracker in active_downloads.items():
+                logs_text += f"• ᴜsᴇʀ {user_id}: {tracker.status}\n"
+            logs_text += "\n"
+        else:
+            logs_text += "<b>✅ ɴᴏ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs</b>\n\n"
+        
+        # System info
+        import psutil
+        cpu_percent = psutil.cpu_percent()
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        
+        logs_text += f"<b>💻 sʏsᴛᴇᴍ ɪɴғᴏ:</b>\n"
+        logs_text += f"• ᴄᴘᴜ: {cpu_percent}%\n"
+        logs_text += f"• ʀᴀᴍ: {memory.percent}% ({format_bytes(memory.used)}/{format_bytes(memory.total)})\n"
+        logs_text += f"• ᴅɪsᴋ: {disk.percent}% ({format_bytes(disk.used)}/{format_bytes(disk.total)})\n\n"
+        
+        # Dump channels status
+        logs_text += f"<b>📁 ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟs:</b>\n"
+        for i, dump_id in enumerate(DUMP_CHAT_IDS, 1):
+            try:
+                chat = await client.get_chat(dump_id)
+                logs_text += f"• ᴄʜᴀɴɴᴇʟ {i}: ✅ {chat.title}\n"
+            except Exception as e:
+                logs_text += f"• ᴄʜᴀɴɴᴇʟ {i}: ❌ {str(e)[:30]}...\n"
+        
+        await message.reply_text(logs_text, parse_mode=ParseMode.HTML)
+        
+    except Exception as e:
+        print(f"❌ Error in logs command: {e}")
+        await message.reply_text(
+            f"<b>❌ ᴇʀʀᴏʀ ɢᴇᴛᴛɪɴɢ ʟᴏɢs:</b> <code>{str(e)}</code>",
+            parse_mode=ParseMode.HTML
+        )
+
+@Client.on_message(filters.command("cleanup") & filters.private & filters.create(check_admin))
+async def cleanup_command(client: Client, message: Message):
+    """Clean up temporary files and reset active downloads"""
+    try:
+        status_msg = await message.reply_text(
+            "<b>🧹 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ...</b>",
+            parse_mode=ParseMode.HTML
+        )
+        
+        cleaned_files = 0
+        cleaned_dirs = 0
+        
+        # Clean downloads directory
+        downloads_dir = "./downloads/"
+        if os.path.exists(downloads_dir):
+            for item in os.listdir(downloads_dir):
+                item_path = os.path.join(downloads_dir, item)
+                try:
+                    if os.path.isfile(item_path):
+                        os.remove(item_path)
+                        cleaned_files += 1
+                    elif os.path.isdir(item_path):
+                        import shutil
+                        shutil.rmtree(item_path)
+                        cleaned_dirs += 1
+                except Exception as e:
+                    print(f"❌ Error cleaning {item_path}: {e}")
+        
+        # Clear active downloads
+        active_count = len(active_downloads)
+        active_downloads.clear()
+        
+        # Clean thumbnail files
+        thumb_files = 0
+        for root, dirs, files in os.walk("."):
+            for file in files:
+                if file.startswith("thumb_") and file.endswith(".jpg"):
+                    try:
+                        os.remove(os.path.join(root, file))
+                        thumb_files += 1
+                    except:
+                        pass
+        
+        await status_msg.edit_text(
+            f"<b>✅ ᴄʟᴇᴀɴᴜᴘ ᴄᴏᴍᴘʟᴇᴛᴇᴅ!</b>\n\n"
+            f"<b>📁 ғɪʟᴇs ʀᴇᴍᴏᴠᴇᴅ:</b> {cleaned_files}\n"
+            f"<b>📂 ᴅɪʀᴇᴄᴛᴏʀɪᴇs ʀᴇᴍᴏᴠᴇᴅ:</b> {cleaned_dirs}\n"
+            f"<b>🖼️ ᴛʜᴜᴍʙɴᴀɪʟs ʀᴇᴍᴏᴠᴇᴅ:</b> {thumb_files}\n"
+            f"<b>🔄 ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs ᴄʟᴇᴀʀᴇᴅ:</b> {active_count}",
+            parse_mode=ParseMode.HTML
+        )
+        
+    except Exception as e:
+        print(f"❌ Error in cleanup command: {e}")
+        await message.reply_text(
+            f"<b>❌ ᴄʟᴇᴀɴᴜᴘ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
+            parse_mode=ParseMode.HTML
+        )
+
+@Client.on_message(filters.command("restart") & filters.private & filters.create(check_admin))
+async def restart_command(client: Client, message: Message):
+    """Restart the bot (admin only)"""
+    try:
+        await message.reply_text(
+            "<b>🔄 ʀᴇsᴛᴀʀᴛɪɴɢ ʙᴏᴛ...</b>\n\n"
+            "<i>ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ᴀ ғᴇᴡ sᴇᴄᴏɴᴅs...</i>",
+            parse_mode=ParseMode.HTML
+        )
+        
+        # Clear active downloads
+        active_downloads.clear()
+        
+        # Clean up files
+        cleanup_files("./downloads/")
+        
+        # Restart the bot
+        os.execv(sys.executable, ['python'] + sys.argv)
+        
+    except Exception as e:
+        print(f"❌ Error in restart command: {e}")
+        await message.reply_text(
+            f"<b>❌ ʀᴇsᴛᴀʀᴛ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
+            parse_mode=ParseMode.HTML
+        )
+
+# @Client.on_message(filters.command("test") & filters.private & filters.create(check_admin))
+# async def test_command(client: Client, message: Message):
+#     """Test bot functionality (admin only)"""
+#     try:
+#         test_results = []
+        
+#         # Test 1: Database connection
+#         try:
+#             user_count = await get_user_count()
+#             test_results.append(f"✅ ᴅᴀᴛᴀʙᴀsᴇ: {user_count} ᴜsᴇʀs")
+#         except Exception as e:
+#             test_results.append(f"❌ ᴅᴀᴛᴀʙᴀsᴇ: {str(e)[:30]}...")
+        
+#         # Test 2: Dump channels
+#         working_dumps = 0
+#         for i, dump_id in enumerate(DUMP_CHAT_IDS, 1):
+#             try:
+#                 chat = await client.get_chat(dump_id)
+#                 working_dumps += 1
+#             except:
+#                 pass
+        
+#         test_results.append(f"✅ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟs: {working_dumps}/{len(DUMP_CHAT_IDS)} ᴡᴏʀᴋɪɴɢ")
+        
+#         # Test 3: YT-DLP
+#         try:
+#             import yt_dlp
+#             test_results.append("✅ ʏᴛ-ᴅʟᴘ: ɪɴsᴛᴀʟʟᴇᴅ")
+#         except ImportError:
+#             test_results.append("❌ ʏᴛ-ᴅʟᴘ: ɴᴏᴛ ɪɴsᴛᴀʟʟᴇᴅ")
+        
+#         # Test 4: FFmpeg
+#         try:
+#             process = await asyncio.create_subprocess_exec(
+#                 'ffmpeg', '-version',
+#                 stdout=asyncio.subprocess.DEVNULL,
+#                 stderr=asyncio.subprocess.DEVNULL
+#             )
+#             await process.communicate()
+#             if process.returncode == 0:
+#                 test_results.append("✅ ғғᴍᴘᴇɢ: ɪɴsᴛᴀʟʟᴇᴅ")
+#             else:
+#                 test_results.append("❌ ғғᴍᴘᴇɢ: ɴᴏᴛ ᴡᴏʀᴋɪɴɢ")
+#         except:
+#             test_results.append("❌ ғғᴍᴘᴇɢ: ɴᴏᴛ ғᴏᴜɴᴅ")
+        
+#         # Test 5: Watermark settings
+#         try:
+#             watermark_settings = await get_watermark_settings()
+#             status = "ᴇɴᴀʙʟᴇᴅ" if watermark_settings.get('enabled') else "ᴅɪsᴀʙʟᴇᴅ"
+#             test_results.append(f"✅ ᴡᴀᴛᴇʀᴍᴀʀᴋ: {status}")
+#         except Exception as e:
+#             test_results.append(f"❌ ᴡᴀᴛᴇʀᴍᴀʀᴋ: {str(e)[:30]}...")
+        
+#         test_text = "<b>🧪 ʙᴏᴛ ᴛᴇsᴛ ʀᴇsᴜʟᴛs</b>\n\n" + "\n".join(test_results)
