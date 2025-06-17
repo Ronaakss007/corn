@@ -1,3 +1,4 @@
+
 import motor.motor_asyncio
 import os
 from datetime import datetime
@@ -19,22 +20,113 @@ try:
     user_data = database['users']
     stats_data = database['stats']
     download_history = database['download_history']
+    watermark_settings = database['watermark_settings']
+    settings_data = database['settings']
+    join_requests = database['join_requests']
     
     logging.info("✅ Database connection initialized")
     
+
+    
+
 except Exception as e:
     logging.error(f"❌ Database connection failed: {e}")
     # Create dummy functions for offline mode
     user_data = None
     stats_data = None
     download_history = None
+    watermark_settings = None
 
-# Collections
-user_data = database['users']
-stats_data = database['stats']
-download_history = database['download_history']
-# Add this collection
-watermark_settings = database['watermark_settings']
+async def get_settings():
+    """Get bot settings from database"""
+    try:
+        settings = await settings_data.find_one({'_id': 'bot_settings'})
+        if not settings:
+            # Default settings
+            default_settings = {
+                '_id': 'bot_settings',
+                'FORCE_SUB_CHANNELS': [],
+                'REQUEST_SUB_CHANNELS': [],
+                'created_at': datetime.now()
+            }
+            await settings_data.insert_one(default_settings)
+            return default_settings
+        return settings
+    except Exception as e:
+        logging.error(f"Error getting settings: {e}")
+        return {
+            'FORCE_SUB_CHANNELS': [],
+            'REQUEST_SUB_CHANNELS': []
+        }
+    
+async def remove_join_request(user_id: int, channel_id: int):
+    """Remove join request when user joins"""
+    try:
+        await join_requests.delete_one({
+            "user_id": user_id,
+            "channel_id": channel_id
+        })
+        print(f"✅ Removed join request for user {user_id} in channel {channel_id}")
+        return True
+    except Exception as e:
+        print(f"❌ Error removing join request: {e}")
+        return False
+    
+async def store_join_request(user_id: int, channel_id: int):
+    """Store a join request in the database"""
+    try:
+        request_data = {
+            "user_id": user_id,
+            "channel_id": channel_id,
+            "status": "pending",
+            "created_at": datetime.now()
+        }
+        
+        # Use upsert to avoid duplicates
+        await join_requests.update_one(
+            {"user_id": user_id, "channel_id": channel_id},
+            {"$set": request_data},
+            upsert=True
+        )
+        print(f"✅ Stored join request for user {user_id} in channel {channel_id}")
+        return True
+    except Exception as e:
+        print(f"❌ Error storing join request: {e}")
+        return False
+
+async def has_pending_request(user_id: int, channel_id: int) -> bool:
+    """Check if a user has a pending join request for a channel in database"""
+    try:
+        # Convert channel_id to int if it's a string
+        if isinstance(channel_id, str):
+            channel_id = int(channel_id)
+            
+        request = await join_requests.find_one({
+            "user_id": user_id, 
+            "channel_id": channel_id,
+            "status": "pending"
+        })
+        result = request is not None
+        print(f"🔍 DB Check: Pending request for user {user_id} in channel {channel_id}: {result}")
+        return result
+    except Exception as e:
+        print(f"❌ Error checking pending request in DB: {e}")
+        return False
+
+
+async def update_settings(settings_dict: dict):
+    """Update bot settings in database"""
+    try:
+        settings_dict['updated_at'] = datetime.now()
+        await settings_data.update_one(
+            {'_id': 'bot_settings'},
+            {'$set': settings_dict},
+            upsert=True
+        )
+        return True
+    except Exception as e:
+        logging.error(f"Error updating settings: {e}")
+        return False
 
 async def get_watermark_settings():
     """Get watermark settings from database"""
@@ -81,7 +173,6 @@ async def update_watermark_settings(settings_data: dict):
         logging.error(f"Error updating watermark settings: {e}")
         return False
 
-
 def new_user(id):
     return {
         '_id': id,
@@ -123,8 +214,6 @@ async def get_user(user_id: int):
     except Exception as e:
         logging.error(f"Error getting user {user_id}: {e}")
         return new_user(user_id)
-
-
 
 async def update_user(user_id: int, update_data: dict):
     try:
@@ -226,9 +315,11 @@ async def get_stats():
             stats = {
                 '_id': 'bot_stats',
                 'total_downloads': 0,
+                'total_file_size': 0,
                 'sites': {},
                 'file_types': {},
                 'daily_stats': {},
+                'top_users': {},
                 'created_at': datetime.now()
             }
             await stats_data.insert_one(stats)
@@ -238,9 +329,11 @@ async def get_stats():
         return {
             '_id': 'bot_stats',
             'total_downloads': 0,
+            'total_file_size': 0,
             'sites': {},
             'file_types': {},
-            'daily_stats': {}
+            'daily_stats': {},
+            'top_users': {}
         }
 
 async def update_stats(update_data: dict):
@@ -319,9 +412,11 @@ async def reset_all_stats():
         new_stats = {
             '_id': 'bot_stats',
             'total_downloads': 0,
+            'total_file_size': 0,
             'sites': {},
             'file_types': {},
             'daily_stats': {},
+            'top_users': {},
             'reset_time': datetime.now()
         }
         
@@ -341,8 +436,9 @@ async def reset_all_stats():
         logging.error(f"Error resetting stats: {e}")
         return False
 
-# Update download statistics
+# Main function to update download statistics
 async def update_download_stats(user_id: int, username: str, url: str, file_size: int, file_type: str):
+    """Update comprehensive download statistics"""
     try:
         from urllib.parse import urlparse
         
@@ -350,7 +446,7 @@ async def update_download_stats(user_id: int, username: str, url: str, file_size
         parsed = urlparse(url)
         site = parsed.netloc.lower().replace('www.', '')
         
-        # Update user stats
+        # Update user stats in user_data collection
         await user_data.update_one(
             {'_id': user_id},
             {
@@ -367,17 +463,63 @@ async def update_download_stats(user_id: int, username: str, url: str, file_size
             upsert=True
         )
         
-        # Update global stats
-        await increment_stats('total_downloads', 1)
-        await update_site_stats(site)
-        await update_file_type_stats(file_type)
-        await update_daily_stats()
+        # Update global stats in stats_data collection
+        await stats_data.update_one(
+            {'_id': 'bot_stats'},
+            {
+                '$inc': {
+                    'total_downloads': 1,
+                    'total_file_size': file_size,
+                    f'sites.{site}': 1,
+                    f'file_types.{file_type}': 1,
+                    f'top_users.{str(user_id)}': 1,
+                    f'daily_stats.{datetime.now().strftime("%Y-%m-%d")}': 1
+                }
+            },
+            upsert=True
+        )
         
         # Add to download history
-        await add_download_history(user_id, url, "Downloaded File", file_size, file_type, site)
+        await add_download_history(user_id, url, f"Downloaded from {site}", file_size, file_type, site)
         
+        print(f"✅ Download stats updated successfully for user {user_id}")
         return True
+        
     except Exception as e:
         logging.error(f"Error updating download stats: {e}")
+        print(f"❌ Failed to update download stats: {e}")
         return False
 
+# Helper function to format file sizes
+def format_bytes(bytes_value):
+    """Format bytes to human readable format"""
+    if bytes_value == 0:
+        return "0 B"
+    
+    size_names = ["B", "KB", "MB", "GB", "TB"]
+    import math
+    i = int(math.floor(math.log(bytes_value, 1024)))
+    p = math.pow(1024, i)
+    s = round(bytes_value / p, 2)
+    return f"{s} {size_names[i]}"
+
+# Function to get detailed stats for admin
+async def get_detailed_stats():
+    """Get detailed statistics for admin panel"""
+    try:
+        stats = await get_stats()
+        user_count = await get_user_count()
+        top_users = await get_top_users(5)
+        
+        return {
+            'total_users': user_count,
+            'total_downloads': stats.get('total_downloads', 0),
+            'total_file_size': stats.get('total_file_size', 0),
+            'top_sites': dict(sorted(stats.get('sites', {}).items(), key=lambda x: x[1], reverse=True)[:5]),
+            'top_users': top_users,
+            'file_types': stats.get('file_types', {}),
+            'daily_stats': stats.get('daily_stats', {})
+        }
+    except Exception as e:
+        logging.error(f"Error getting detailed stats: {e}")
+        return {}

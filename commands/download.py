@@ -18,6 +18,7 @@ from pyrogram.errors import FloodWait
 import math
 import sys
 # Add this import
+from commands.basic import check_subscription
 from database import *
 
 user_client = None
@@ -63,29 +64,38 @@ def split_file(file_path, chunk_size=1.98 * 1024 * 1024 * 1024):  # 1.98GB
 async def register_new_user(user_id, username, first_name):
     """Register new user in database only if they don't exist"""
     try:
-        user = await get_user(user_id)  # This already creates user if not exists
+        # Get existing user or create new one
+        user = await get_user(user_id)
         
-        # Only update if user info has changed
-        current_username = user.get('username', '')
-        current_first_name = user.get('first_name', '')
+        # Prepare separate update operations to avoid conflicts
+        updates_needed = []
         
-        if current_username != (username or '') or current_first_name != (first_name or ''):
-            await update_user(user_id, {
-                'username': username or first_name or "Unknown",
-                'first_name': first_name or "",
-                'last_activity': datetime.now()
-            })
-            print(f"✅ User info updated: {user_id} ({username})")
-        else:
-            # Just update last activity
-            await update_user(user_id, {
-                'last_activity': datetime.now()
-            })
+        # Always update last activity
+        updates_needed.append({'last_activity': datetime.now()})
         
-        return True
+        # Check if username needs updating
+        current_username = user.get('username', '') or ''
+        new_username = (username or '').strip()
+        if new_username and current_username != new_username:
+            updates_needed.append({'username': new_username})
+            
+        # Check if first_name needs updating
+        current_first_name = user.get('first_name', '') or ''
+        new_first_name = (first_name or '').strip()
+        if new_first_name and current_first_name != new_first_name:
+            updates_needed.append({'first_name': new_first_name})
+        
+        # Apply updates one by one to avoid conflicts
+        for update_data in updates_needed:
+            await update_user(user_id, update_data)
+            
+        print(f"✅ User {user_id} registered/updated")
+        return user
+        
     except Exception as e:
-        print(f"❌ Error registering user: {e}")
-        return False
+        print(f"❌ Error registering user {user_id}: {e}")
+        return await get_user(user_id)  # Just return the user as-is
+
 
 # Get dump channels from config (fixed)
 DUMP_CHAT_IDS = Config.DUMP_CHAT_IDS
@@ -418,6 +428,9 @@ def check_admin(_, __, message):
 async def handle_url_message(client: Client, message: Message):
     """Handle URL messages for download"""
     try:
+        if not await check_subscription(client, message):
+            return
+        
         if not message.text:
             return
             
@@ -439,14 +452,14 @@ async def handle_url_message(client: Client, message: Message):
         # Register/update user in database
         await register_new_user(user_id, username, first_name)
         
-        # # Check if user already has active download
-        # if user_id in active_downloads:
-        #     await message.reply_text(
-        #         "<b>❌ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ</b>\n\n"
-        #         "ʏᴏᴜ ᴀʟʀᴇᴀᴅʏ ʜᴀᴠᴇ ᴀɴ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ! ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ғᴏʀ ɪᴛ ᴛᴏ ᴄᴏᴍᴘʟᴇᴛᴇ.",
-        #         parse_mode=ParseMode.HTML
-        #     )
-        #     return
+        # Check if user already has active download
+        if user_id in active_downloads:
+            await message.reply_text(
+                "<b>❌ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ</b>\n\n"
+                "ʏᴏᴜ ᴀʟʀᴇᴀᴅʏ ʜᴀᴠᴇ ᴀɴ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ! ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ғᴏʀ ɪᴛ ᴛᴏ ᴄᴏᴍᴘʟᴇᴛᴇ.",
+                parse_mode=ParseMode.HTML
+            )
+            return
         
         # Continue with existing download logic...
         active_downloads[user_id] = ProgressTracker()
@@ -552,6 +565,8 @@ async def download_and_send(client, message, status_msg, url, user_id):
         
         # Process each downloaded file
         uploaded_successfully = False
+        total_file_size = 0
+        uploaded_files = []
         
         for file_path in downloaded_files:
             try:
@@ -623,20 +638,14 @@ async def download_and_send(client, message, status_msg, url, user_id):
                             message_id=dump_message.id
                         )
                     
-                    # Update stats
-                    file_ext = os.path.splitext(file_name)[1].lower()
-                    if file_ext in ['.mp4', '.mkv', '.avi', '.mov', '.webm']:
-                        file_type = 'video'
-                    elif file_ext in ['.mp3', '.m4a', '.wav', '.flac', '.ogg']:
-                        file_type = 'audio'
-                    else:
-                        file_type = 'document'
-                    
-                    username = message.from_user.first_name or message.from_user.username or "Unknown"
-                    update_download_stats(user_id, username, url, file_size, file_type)
-                    
-                    # Record successful upload
+                    # Track successful upload
                     uploaded_successfully = True
+                    total_file_size += file_size
+                    uploaded_files.append({
+                        'name': file_name,
+                        'size': file_size,
+                        'path': file_path
+                    })
                     
                 else:
                     await message.reply_text(
@@ -650,6 +659,32 @@ async def download_and_send(client, message, status_msg, url, user_id):
                     f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇɴᴅ:</b> {os.path.basename(file_path)}",
                     parse_mode=ParseMode.HTML
                 )
+        
+        # Update database stats after successful uploads
+        if uploaded_successfully and total_file_size > 0:
+            try:
+                # Extract site domain from URL
+                site_domain = extract_domain(url)
+                
+                # Get user info
+                username = message.from_user.first_name or message.from_user.username or "Unknown"
+                
+                # Determine file type
+                file_ext = os.path.splitext(uploaded_files[0]['name'])[1].lower()
+                if file_ext in ['.mp4', '.mkv', '.avi', '.mov', '.webm']:
+                    file_type = 'video'
+                elif file_ext in ['.mp3', '.m4a', '.wav', '.flac', '.ogg']:
+                    file_type = 'audio'
+                else:
+                    file_type = 'document'
+                
+                # Update download statistics in database
+                await update_download_stats(user_id, username, url, total_file_size, file_type)
+                
+                print(f"✅ Stats updated - User: {user_id}, Site: {site_domain}, Size: {format_bytes(total_file_size)}")
+                
+            except Exception as e:
+                print(f"❌ Error updating download stats: {e}")
         
         # STEP 5: Delete the status message after everything is done
         if uploaded_successfully:
@@ -681,6 +716,31 @@ async def download_and_send(client, message, status_msg, url, user_id):
         cleanup_files(f"./downloads/{user_id}/")
         if user_id in active_downloads:
             del active_downloads[user_id]
+
+def extract_domain(url: str) -> str:
+    """Extract domain from URL"""
+    try:
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc
+        # Remove www. prefix and return clean domain
+        clean_domain = domain.replace('www.', '') if domain.startswith('www.') else domain
+        return clean_domain.lower()
+    except Exception as e:
+        print(f"Error extracting domain from {url}: {e}")
+        return "unknown"
+
+def format_bytes(bytes_value):
+    """Format bytes to human readable format"""
+    if bytes_value == 0:
+        return "0 B"
+    
+    size_names = ["B", "KB", "MB", "GB", "TB"]
+    import math
+    i = int(math.floor(math.log(bytes_value, 1024)))
+    p = math.pow(1024, i)
+    s = round(bytes_value / p, 2)
+    return f"{s} {size_names[i]}"
+
 
 async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_msg):
     """Upload file to dump channel with progress using user session if available"""
@@ -1084,22 +1144,60 @@ async def stats_command(client: Client, message: Message):
         stats = await get_stats()
         user_count = await get_user_count()
         
+        # Get additional stats
+        total_downloads = stats.get('total_downloads', 0)
+        total_file_size = stats.get('total_file_size', 0)
+        
+        # Format file size
+        def format_size(size_bytes):
+            if size_bytes == 0:
+                return "0 B"
+            size_names = ["B", "KB", "MB", "GB", "TB"]
+            import math
+            i = int(math.floor(math.log(size_bytes, 1024)))
+            p = math.pow(1024, i)
+            s = round(size_bytes / p, 2)
+            return f"{s} {size_names[i]}"
+        
         stats_text = (
             "<b>📊 ʙᴏᴛ sᴛᴀᴛɪsᴛɪᴄs</b>\n\n"
             f"<b>🤖 ʙᴏᴛ ɴᴀᴍᴇ:</b> {Config.BOT_NAME}\n"
             f"<b>👥 ᴛᴏᴛᴀʟ ᴜsᴇʀs:</b> {user_count:,}\n"
-            f"<b>📥 ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {stats.get('total_downloads', 0):,}\n"
+            f"<b>📥 ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {total_downloads:,}\n"
+            f"<b>💾 ᴛᴏᴛᴀʟ ғɪʟᴇ sɪᴢᴇ:</b> {format_size(total_file_size)}\n"
             f"<b>🔄 ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {len(active_downloads)}\n"
-            f"<b>💾 ᴍᴀx ғɪʟᴇ sɪᴢᴇ:</b> 2ɢʙ\n\n"
+            f"<b>📏 ᴍᴀx ғɪʟᴇ sɪᴢᴇ:</b> 2ɢʙ\n\n"
         )
         
         # Show top sites if available
         sites = stats.get('sites', {})
         if sites:
-            top_sites = sorted(sites.items(), key=lambda x: x[1], reverse=True)[:3]
+            top_sites = sorted(sites.items(), key=lambda x: x[1], reverse=True)[:5]
             stats_text += "<b>🌐 ᴛᴏᴘ sɪᴛᴇs:</b>\n"
             for site, count in top_sites:
-                stats_text += f"• {site}: {count:,}\n"
+                stats_text += f"• {site}: {count:,} downloads\n"
+            stats_text += "\n"
+        
+        # Show top users if available
+        top_users_data = stats.get('top_users', {})
+        if top_users_data:
+            sorted_users = sorted(top_users_data.items(), key=lambda x: x[1], reverse=True)[:5]
+            stats_text += "<b>👑 ᴛᴏᴘ ᴜsᴇʀs:</b>\n"
+            for user_id, download_count in sorted_users:
+                try:
+                    user = await client.get_users(int(user_id))
+                    name = user.first_name or "Unknown"
+                    stats_text += f"• {name}: {download_count:,} downloads\n"
+                except:
+                    stats_text += f"• User {user_id}: {download_count:,} downloads\n"
+            stats_text += "\n"
+        
+        # Show file types if available
+        file_types = stats.get('file_types', {})
+        if file_types:
+            stats_text += "<b>📁 ғɪʟᴇ ᴛʏᴘᴇs:</b>\n"
+            for file_type, count in sorted(file_types.items(), key=lambda x: x[1], reverse=True)[:3]:
+                stats_text += f"• {file_type.title()}: {count:,}\n"
             stats_text += "\n"
         
         stats_text += "<b>✅ sᴛᴀᴛᴜs:</b> ʙᴏᴛ ɪs ᴡᴏʀᴋɪɴɢ!"
@@ -1113,6 +1211,135 @@ async def stats_command(client: Client, message: Message):
             parse_mode=ParseMode.HTML
         )
 
+async def update_download_stats(user_id: int, site: str, file_size: int = 0):
+    """Update download statistics"""
+    try:
+        # Update total downloads
+        await database.stats_data.update_one(
+            {"_id": "bot_stats"},
+            {
+                "$inc": {
+                    "total_downloads": 1,
+                    "total_file_size": file_size,
+                    f"sites.{site}": 1,
+                    f"top_users.{str(user_id)}": 1
+                }
+            },
+            upsert=True
+        )
+        print(f"✅ Updated download stats for user {user_id}, site: {site}, size: {file_size}")
+    except Exception as e:
+        print(f"❌ Error updating download stats: {e}")
+
+async def get_stats():
+    """Get bot statistics"""
+    try:
+        stats = await database.stats_data.find_one({"_id": "bot_stats"})
+        if not stats:
+            return {
+                "total_downloads": 0,
+                "total_file_size": 0,
+                "sites": {},
+                "top_users": {},
+                "file_types": {}
+            }
+        return stats
+    except Exception as e:
+        print(f"❌ Error getting stats: {e}")
+        return {
+            "total_downloads": 0,
+            "total_file_size": 0,
+            "sites": {},
+            "top_users": {},
+            "file_types": {}
+        }
+
+async def register_new_user(user_id: int, username: str, first_name: str):
+    """Register new user or update existing user info"""
+    try:
+        await database.user_data.update_one(
+            {"_id": user_id},
+            {
+                "$setOnInsert": {
+                    "_id": user_id,
+                    "username": username,
+                    "first_name": first_name,
+                    "total_downloads": 0,
+                    "total_size": 0,
+                    "favorite_sites": {},
+                    "join_date": datetime.now(),
+                    "last_activity": datetime.now()
+                },
+                "$set": {
+                    "username": username,
+                    "first_name": first_name,
+                    "last_activity": datetime.now()
+                }
+            },
+            upsert=True
+        )
+        return True
+    except Exception as e:
+        print(f"❌ Error registering user {user_id}: {e}")
+        return False
+
+async def get_user(user_id: int):
+    """Get user data from database"""
+    try:
+        user = await database.user_data.find_one({"_id": user_id})
+        if not user:
+            # Return default user data
+            return {
+                "_id": user_id,
+                "username": "",
+                "first_name": "",
+                "total_downloads": 0,
+                "total_size": 0,
+                "favorite_sites": {},
+                "join_date": datetime.now(),
+                "last_activity": datetime.now()
+            }
+        return user
+    except Exception as e:
+        print(f"❌ Error getting user {user_id}: {e}")
+        return {
+            "_id": user_id,
+            "username": "",
+            "first_name": "",
+            "total_downloads": 0,
+            "total_size": 0,
+            "favorite_sites": {},
+            "join_date": datetime.now(),
+            "last_activity": datetime.now()
+        }
+
+async def get_user_rank(user_id: int):
+    """Get user's rank based on total downloads"""
+    try:
+        user = await get_user(user_id)
+        user_downloads = user.get('total_downloads', 0)
+        
+        # Count users with more downloads
+        higher_users = await database.user_data.count_documents({
+            'total_downloads': {'$gt': user_downloads}
+        })
+        
+        return higher_users + 1
+    except Exception as e:
+        print(f"❌ Error getting user rank for {user_id}: {e}")
+        return 0
+
+async def get_user_download_history(user_id: int, limit: int = 10):
+    """Get user's download history"""
+    try:
+        history = []
+        async for entry in database.download_history.find({'user_id': user_id}).sort('download_time', -1).limit(limit):
+            history.append(entry)
+        return history
+    except Exception as e:
+        print(f"❌ Error getting download history for user {user_id}: {e}")
+        return []
+
 @Client.on_message(filters.command("mystats") & filters.private)
 async def mystats_command(client: Client, message: Message):
     """Show user's personal statistics"""
@@ -1120,10 +1347,7 @@ async def mystats_command(client: Client, message: Message):
         user_id = message.from_user.id
         username = message.from_user.first_name or message.from_user.username or "Unknown"
         
-        # Register/update user
-        await register_new_user(user_id, username, message.from_user.first_name or "")
-        
-        # Get user data from database
+        # Just ensure user exists - don't try to update username/first_name
         user = await get_user(user_id)
         user_rank = await get_user_rank(user_id)
         
@@ -1164,6 +1388,7 @@ async def mystats_command(client: Client, message: Message):
             parse_mode=ParseMode.HTML
         )
 
+
 @Client.on_message(filters.command("history") & filters.private)
 async def history_command(client: Client, message: Message):
     """Show user's download history"""
@@ -1171,8 +1396,8 @@ async def history_command(client: Client, message: Message):
         user_id = message.from_user.id
         username = message.from_user.first_name or message.from_user.username or "Unknown"
         
-        # Register/update user
-        await register_new_user(user_id, username, message.from_user.first_name or "")
+        # Just ensure user exists - don't try to update username/first_name
+        user = await get_user(user_id)
         
         # Get download history from database
         history = await get_user_download_history(user_id, 20)
@@ -1186,20 +1411,37 @@ async def history_command(client: Client, message: Message):
             )
             return
         
+        # Format file size helper
+        def format_size(size_bytes):
+            if size_bytes == 0:
+                return "0 B"
+            size_names = ["B", "KB", "MB", "GB", "TB"]
+            import math
+            i = int(math.floor(math.log(size_bytes, 1024)))
+            p = math.pow(1024, i)
+            s = round(size_bytes / p, 2)
+            return f"{s} {size_names[i]}"
+        
         history_text = f"<b>📋 ʏᴏᴜʀ ᴅᴏᴡɴʟᴏᴀᴅ ʜɪsᴛᴏʀʏ</b>\n\n"
         
         for i, item in enumerate(history, 1):
             date = item.get('download_time', datetime.now()).strftime('%Y-%m-%d %H:%M')
             site = item.get('site', 'Unknown')
-            file_size = format_bytes(item.get('file_size', 0))
+            file_size = format_size(item.get('file_size', 0))
             file_type = item.get('file_type', 'unknown')
+            file_name = item.get('file_name', 'Unknown File')
             
             # Truncate long URLs
             url = item.get('url', 'Unknown')
             if len(url) > 40:
                 url = url[:37] + "..."
             
+            # Truncate long file names
+            if len(file_name) > 30:
+                file_name = file_name[:27] + "..."
+            
             history_text += f"<b>{i}.</b> <code>{date}</code>\n"
+            history_text += f"   📁 <code>{file_name}</code>\n"
             history_text += f"   🌐 {site} • 📦 {file_size} • 📄 {file_type}\n"
             history_text += f"   🔗 <code>{url}</code>\n\n"
             
@@ -1207,6 +1449,11 @@ async def history_command(client: Client, message: Message):
             if len(history_text) > 3500:
                 history_text += f"<i>... ᴀɴᴅ {len(history) - i} ᴍᴏʀᴇ</i>"
                 break
+        
+        # Add summary at the end
+        total_downloads = len(history)
+        total_size = sum(item.get('file_size', 0) for item in history)
+        history_text += f"<b>📊 sᴜᴍᴍᴀʀʏ:</b> {total_downloads} downloads • {format_size(total_size)}"
         
         await message.reply_text(history_text, parse_mode=ParseMode.HTML)
         
@@ -1224,8 +1471,8 @@ async def leaderboard_command(client: Client, message: Message):
         user_id = message.from_user.id
         username = message.from_user.first_name or message.from_user.username or "Unknown"
         
-        # Register/update user
-        await register_new_user(user_id, username, message.from_user.first_name or "")
+        # Just ensure user exists - don't try to update username/first_name
+        user = await get_user(user_id)
         
         # Get top users from database
         top_users = await get_top_users(10)
@@ -1241,6 +1488,18 @@ async def leaderboard_command(client: Client, message: Message):
         
         # Get current user's rank
         user_rank = await get_user_rank(user_id)
+        current_user = await get_user(user_id)
+        
+        # Format file size helper
+        def format_size(size_bytes):
+            if size_bytes == 0:
+                return "0 B"
+            size_names = ["B", "KB", "MB", "GB", "TB"]
+            import math
+            i = int(math.floor(math.log(size_bytes, 1024)))
+            p = math.pow(1024, i)
+            s = round(size_bytes / p, 2)
+            return f"{s} {size_names[i]}"
         
         leaderboard_text = f"<b>🏆 ᴛᴏᴘ ᴅᴏᴡɴʟᴏᴀᴅᴇʀs</b>\n\n"
         
@@ -1249,7 +1508,7 @@ async def leaderboard_command(client: Client, message: Message):
         for i, user in enumerate(top_users, 1):
             username_display = user.get('username', user.get('first_name', 'Unknown'))
             downloads = user.get('total_downloads', 0)
-            total_size = format_bytes(user.get('total_size', 0))
+            total_size = format_size(user.get('total_size', 0))
             
             # Truncate long usernames
             if len(username_display) > 15:
@@ -1267,16 +1526,17 @@ async def leaderboard_command(client: Client, message: Message):
         
         # Show current user's rank if not in top 10
         if user_rank > 10:
-            user = await get_user(user_id)
-            username_display = user.get('username', user.get('first_name', 'You'))
-            downloads = user.get('total_downloads', 0)
-            total_size = format_bytes(user.get('total_size', 0))
+            username_display = current_user.get('username', current_user.get('first_name', 'You'))
+            downloads = current_user.get('total_downloads', 0)
+            total_size = format_size(current_user.get('total_size', 0))
             
             leaderboard_text += f"<b>━━━━━━━━━━━━━━━━━━━━</b>\n"
             leaderboard_text += f"<b>➤ #{user_rank} {username_display}</b>\n"
             leaderboard_text += f"   📈 {downloads:,} downloads • 💾 {total_size}\n\n"
         
-        leaderboard_text += f"<i>ʏᴏᴜʀ ʀᴀɴᴋ: #{user_rank}</i>"
+        # Add additional stats
+        leaderboard_text += f"<i>ʏᴏᴜʀ ʀᴀɴᴋ: #{user_rank}</i>\n"
+        leaderboard_text += f"<i>ʏᴏᴜʀ ᴅᴏᴡɴʟᴏᴀᴅs: {current_user.get('total_downloads', 0):,}</i>"
         
         await message.reply_text(leaderboard_text, parse_mode=ParseMode.HTML)
         
@@ -1286,6 +1546,62 @@ async def leaderboard_command(client: Client, message: Message):
             "<b>❌ ᴇʀʀᴏʀ ʟᴏᴀᴅɪɴɢ ʟᴇᴀᴅᴇʀʙᴏᴀʀᴅ</b>",
             parse_mode=ParseMode.HTML
         )
+
+
+# Helper function to get top users from database
+async def get_top_users(limit: int = 10):
+    """Get top users by download count"""
+    try:
+        users = []
+        async for user in database.user_data.find({}).sort('total_downloads', -1).limit(limit):
+            users.append(user)
+        return users
+    except Exception as e:
+        print(f"❌ Error getting top users: {e}")
+        return []
+
+# Enhanced function to get user download history with better data
+async def get_user_download_history(user_id: int, limit: int = 10):
+    """Get user's download history with enhanced data"""
+    try:
+        history = []
+        async for entry in database.download_history.find({'user_id': user_id}).sort('download_time', -1).limit(limit):
+            history.append(entry)
+        return history
+    except Exception as e:
+        print(f"❌ Error getting download history for user {user_id}: {e}")
+        return []
+
+# Function to register/update user information
+async def register_new_user(user_id: int, username: str, first_name: str):
+    """Register new user or update existing user info"""
+    try:
+        await database.user_data.update_one(
+            {"_id": user_id},
+            {
+                "$setOnInsert": {
+                    "_id": user_id,
+                    "username": username,
+                    "first_name": first_name,
+                    "total_downloads": 0,
+                    "total_size": 0,
+                    "favorite_sites": {},
+                    "join_date": datetime.now(),
+                    "last_activity": datetime.now()
+                },
+                "$set": {
+                    "username": username,
+                    "first_name": first_name,
+                    "last_activity": datetime.now()
+                }
+            },
+            upsert=True
+        )
+        return True
+    except Exception as e:
+        print(f"❌ Error registering user {user_id}: {e}")
+        return False
+
 
 @Client.on_message(filters.command("fix_dumps") & filters.create(check_admin))
 async def fix_dump_channels(client: Client, message: Message):
