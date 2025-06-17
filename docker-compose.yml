@@ -61,21 +61,6 @@ services:
     networks:
       - ytdl-network
 
-  nginx:
-    container_name: ytdl-nginx
-    image: nginx:alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf
-      - ./ssl:/etc/nginx/ssl
-    depends_on:
-      - ytdl-bot
-    networks:
-      - ytdl-network
-
 volumes:
   mongodb_data:
     driver: local
