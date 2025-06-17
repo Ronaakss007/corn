@@ -509,7 +509,7 @@ async def download_and_send(client, message, status_msg, url, user_id):
             'progress_hooks': [progress_hook],
         }
         
-        # Start progress update task
+        # Start progress update task for downloading
         progress_task = asyncio.create_task(update_progress(status_msg, user_id, url))
         
         # Download in a separate thread
@@ -527,6 +527,16 @@ async def download_and_send(client, message, status_msg, url, user_id):
             )
             return
         
+        # STEP 2: Show download complete message
+        await status_msg.edit_text(
+            "<b>✅ ᴅᴏᴡɴʟᴏᴀᴅ ᴄᴏᴍᴘʟᴇᴛᴇᴅ!</b>\n\n"
+            "<b>📋 ᴘʀᴇᴘᴀʀɪɴɢ ғɪʟᴇs ғᴏʀ ᴜᴘʟᴏᴀᴅ...</b>",
+            parse_mode=ParseMode.HTML
+        )
+        
+        # Small delay to show the message
+        await asyncio.sleep(1)
+        
         # Find downloaded files
         downloaded_files = []
         for file in os.listdir(download_dir):
@@ -540,7 +550,9 @@ async def download_and_send(client, message, status_msg, url, user_id):
             )
             return
         
-        # Upload to dump channels and send to user
+        # Process each downloaded file
+        uploaded_successfully = False
+        
         for file_path in downloaded_files:
             try:
                 file_size = os.path.getsize(file_path)
@@ -553,32 +565,24 @@ async def download_and_send(client, message, status_msg, url, user_id):
                         parse_mode=ParseMode.HTML
                     )
                     continue
-
+                
+                # STEP 3: Start uploading (upload_to_dump will handle progress)
                 print(f"📤 Starting upload: {file_name} ({format_bytes(file_size)})")
                 
-                # # Update status to uploading
-                # await status_msg.edit_text(
-                #     f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ</b>\n\n"
-                #     f"<b>📁 ғɪʟᴇ:</b> {file_name}\n"
-                #     f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
-                #     f"<b>⏳ sᴛᴀᴛᴜs:</b> ᴜᴘʟᴏᴀᴅɪɴɢ ᴛᴏ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟ...",
-                #     parse_mode=ParseMode.HTML
-                # )
-                
-                # Check if dump channels are configured
-                if not DUMP_CHAT_IDS:
-                    await message.reply_text(
-                        "<b>❌ ɴᴏ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟs ᴄᴏɴғɪɢᴜʀᴇᴅ!</b>\n\n"
-                        "ᴄᴏɴᴛᴀᴄᴛ ᴀᴅᴍɪɴ ᴛᴏ sᴇᴛᴜᴘ ᴅᴜᴍᴘ ᴄʜᴀɴɴᴇʟs.",
-                        parse_mode=ParseMode.HTML
-                    )
-                    continue
-                
-                # Upload to first dump channel
+                # Upload to first dump channel (this will show live progress)
                 dump_message = await upload_to_dump(client, file_path, DUMP_CHAT_IDS[0], progress_tracker, status_msg)
                 
                 if dump_message:
-                    # Copy to other dump channels
+                    # STEP 4: Show upload complete message briefly
+                    await status_msg.edit_text(
+                        f"<b>✅ ᴜᴘʟᴏᴀᴅ sᴜᴄᴄᴇssғᴜʟ!</b>\n\n"
+                        f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+                        f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
+                        f"<b>📤 ᴄᴏᴘʏɪɴɢ ᴛᴏ ᴏᴛʜᴇʀ ᴄʜᴀɴɴᴇʟs...</b>",
+                        parse_mode=ParseMode.HTML
+                    )
+                    
+                    # Copy to other dump channels (without buttons)
                     for dump_id in DUMP_CHAT_IDS[1:]:
                         try:
                             await client.copy_message(
@@ -589,12 +593,35 @@ async def download_and_send(client, message, status_msg, url, user_id):
                         except Exception as e:
                             print(f"❌ Error copying to dump {dump_id}: {e}")
                     
-                    # Send to user
-                    await client.copy_message(
-                        chat_id=message.chat.id,
-                        from_chat_id=DUMP_CHAT_IDS[0],
-                        message_id=dump_message.id
+                    # Update status for sending to user
+                    await status_msg.edit_text(
+                        f"<b>📤 sᴇɴᴅɪɴɢ ᴛᴏ ʏᴏᴜ...</b>\n\n"
+                        f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>",
+                        parse_mode=ParseMode.HTML
                     )
+                    
+                    # Create inline keyboard ONLY for user messages
+                    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+                    user_keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📺 ᴍᴏʀᴇ ᴠɪᴅᴇᴏs", url="https://t.me/shizukawachan/20")]
+                    ])
+                    
+                    # Send to user WITH inline keyboard
+                    try:
+                        user_message = await client.copy_message(
+                            chat_id=message.chat.id,
+                            from_chat_id=DUMP_CHAT_IDS[0],
+                            message_id=dump_message.id,
+                            reply_markup=user_keyboard  # Only for user messages
+                        )
+                    except Exception as e:
+                        print(f"❌ Error sending to user: {e}")
+                        # Fallback: send without keyboard
+                        await client.copy_message(
+                            chat_id=message.chat.id,
+                            from_chat_id=DUMP_CHAT_IDS[0],
+                            message_id=dump_message.id
+                        )
                     
                     # Update stats
                     file_ext = os.path.splitext(file_name)[1].lower()
@@ -607,30 +634,45 @@ async def download_and_send(client, message, status_msg, url, user_id):
                     
                     username = message.from_user.first_name or message.from_user.username or "Unknown"
                     update_download_stats(user_id, username, url, file_size, file_type)
+                    
+                    # Record successful upload
+                    uploaded_successfully = True
+                    
                 else:
                     await message.reply_text(
-                        f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ ᴜᴘʟᴏᴀᴅ:</b> {file_name}",
+                        f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ ᴜᴘʟᴏᴀᴅ:</b> {os.path.basename(file_path)}",
                         parse_mode=ParseMode.HTML
                     )
                 
             except Exception as e:
                 print(f"❌ Error processing file {file_path}: {e}")
                 await message.reply_text(
-                    f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇɴᴅ:</b> {os.path.basename(file_path)}\n\n"
-                    f"<b>ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
+                    f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇɴᴅ:</b> {os.path.basename(file_path)}",
                     parse_mode=ParseMode.HTML
                 )
         
-        # Final status
-        await status_msg.edit_text(
-            "<b>✅ ᴅᴏᴡɴʟᴏᴀᴅ ᴄᴏᴍᴘʟᴇᴛᴇ!</b>",
-            parse_mode=ParseMode.HTML
-        )
+        # STEP 5: Delete the status message after everything is done
+        if uploaded_successfully:
+            try:
+                await asyncio.sleep(2)  # Brief delay to show final message
+                await status_msg.delete()
+            except Exception:
+                # If can't delete, just edit to final message
+                await status_msg.edit_text(
+                    "<b>✅ ᴀʟʟ ᴅᴏɴᴇ!</b>",
+                    parse_mode=ParseMode.HTML
+                )
+        else:
+            # If no files uploaded successfully, show error
+            await status_msg.edit_text(
+                "<b>❌ ɴᴏ ғɪʟᴇs ᴜᴘʟᴏᴀᴅᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!</b>",
+                parse_mode=ParseMode.HTML
+            )
         
     except Exception as e:
         print(f"❌ Error in download_and_send: {e}")
         await status_msg.edit_text(
-            f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
+            f"<b>❌ ᴇʀʀᴏʀ:</b> {str(e)}",
             parse_mode=ParseMode.HTML
         )
     
@@ -688,12 +730,30 @@ async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_ms
             
             return uploaded_messages[0] if uploaded_messages else None
         else:
-            # Upload single file
+            # Show initial upload message for single files
+            await status_msg.edit_text(
+                f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ </b>\n\n"
+                f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+                f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
+                f"<b>📊 ᴘʀᴏɢʀᴇss:</b> 0.0%\n"
+                f"<b>⚡ sᴘᴇᴇᴅ:</b> ᴄᴀʟᴄᴜʟᴀᴛɪɴɢ...\n"
+                f"<b>⏳ sᴛᴀᴛᴜs:</b> sᴛᴀʀᴛɪɴɢ ᴜᴘʟᴏᴀᴅ...",
+                parse_mode=ParseMode.HTML
+            )
+            
+            # Upload single file (NO KEYBOARD - dump channel only)
             return await upload_single_file(upload_client, file_path, dump_id, progress_tracker, status_msg)
         
     except Exception as e:
         print(f"❌ Error uploading to dump: {e}")
+        await status_msg.edit_text(
+            f"<b>❌ ᴜᴘʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
+            f"<b>📁 ғɪʟᴇ:</b> <code>{os.path.basename(file_path)}</code>\n"
+            f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
+            parse_mode=ParseMode.HTML
+        )
         return None
+
 
 async def upload_single_file(upload_client, file_path, dump_id, progress_tracker, status_msg, part_num=None, total_parts=None):
     """Upload a single file with real-time progress tracking and speed display"""
@@ -776,23 +836,6 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
         else:
             caption = f"<b>📁 {file_name}</b>\n<b>📦 {format_bytes(file_size)}</b>\n\n"
         
-        # Add metadata if available
-        if metadata:
-            if metadata.get('title'):
-                caption += f"<b>🎬 ᴛɪᴛʟᴇ:</b> {metadata['title'][:50]}{'...' if len(metadata['title']) > 50 else ''}\n"
-            if metadata.get('duration'):
-                caption += f"<b>⏱️ ᴅᴜʀᴀᴛɪᴏɴ:</b> {metadata['duration_string']}\n"
-            if metadata.get('uploader'):
-                caption += f"<b>👤 ᴜᴘʟᴏᴀᴅᴇʀ:</b> {metadata['uploader'][:30]}{'...' if len(metadata['uploader']) > 30 else ''}\n"
-            caption += "\n"
-        
-        caption += f"<b>🤖 ᴜᴘʟᴏᴀᴅᴇᴅ ʙʏ:</b> @{Config.BOT_USERNAME}"
-        
-        # Create inline keyboard with channel button
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📺 ᴅɪʀᴇᴄᴛ ᴠɪᴅᴇᴏs ᴄʜᴀɴɴᴇʟ", url="https://t.me/shizukawachan/20")]
-        ])
-        
         # Generate thumbnail for videos
         thumbnail_path = None
         if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
@@ -818,7 +861,6 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                         chat_id=dump_id,
                         video=file_path,
                         caption=caption,
-                        reply_markup=keyboard,
                         supports_streaming=True,
                         thumb=thumbnail_path,
                         duration=int(metadata.get('duration', 0)) if metadata else 0,
@@ -833,7 +875,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                         chat_id=dump_id,
                         audio=file_path,
                         caption=caption,
-                        reply_markup=keyboard,
+                        # reply_markup=keyboard,
                         duration=int(metadata.get('duration', 0)) if metadata else 0,
                         performer=metadata.get('uploader', 'Unknown') if metadata else 'Unknown',
                         title=metadata.get('title', file_name) if metadata else file_name,
@@ -847,7 +889,7 @@ async def upload_single_file(upload_client, file_path, dump_id, progress_tracker
                         chat_id=dump_id,
                         document=file_path,
                         caption=caption,
-                        reply_markup=keyboard,
+                        # reply_markup=keyboard,
                         thumb=thumbnail_path,
                         progress=upload_progress,
                         parse_mode=ParseMode.HTML
