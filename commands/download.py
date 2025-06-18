@@ -369,7 +369,6 @@ async def download_and_send(client, message, status_msg, url, user_id):
         # Delete the status message after everything is done
         if uploaded_successfully:
             try:
-                await asyncio.sleep(0.5)
                 await status_msg.delete()
                 await message.delete()
             except Exception:
