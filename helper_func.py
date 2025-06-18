@@ -374,8 +374,54 @@ async def create_user_keyboard(is_premium=False):
 
 # ==================== DOWNLOAD UTILITIES ====================
 
+import browser_cookie3
+
+def get_instagram_cookies():
+    """Extract Instagram cookies from browser"""
+    try:
+        # Try Chrome first
+        cookies = browser_cookie3.chrome(domain_name='instagram.com')
+        if cookies:
+            print("✅ Found Instagram cookies in Chrome")
+            return cookies
+    except Exception as e:
+        print(f"❌ Chrome cookies failed: {e}")
+    
+    try:
+        # Try Firefox
+        cookies = browser_cookie3.firefox(domain_name='instagram.com')
+        if cookies:
+            print("✅ Found Instagram cookies in Firefox")
+            return cookies
+    except Exception as e:
+        print(f"❌ Firefox cookies failed: {e}")
+    
+    return None
+
+def get_tiktok_cookies():
+    """Extract TikTok cookies from browser"""
+    try:
+        # Try Chrome first
+        cookies = browser_cookie3.chrome(domain_name='tiktok.com')
+        if cookies:
+            print("✅ Found TikTok cookies in Chrome")
+            return cookies
+    except Exception as e:
+        print(f"❌ Chrome TikTok cookies failed: {e}")
+    
+    try:
+        # Try Firefox
+        cookies = browser_cookie3.firefox(domain_name='tiktok.com')
+        if cookies:
+            print("✅ Found TikTok cookies in Firefox")
+            return cookies
+    except Exception as e:
+        print(f"❌ Firefox TikTok cookies failed: {e}")
+    
+    return None
+
 def get_download_options(url):
-    """Get download options based on URL"""
+    """Get download options based on URL with cookie support"""
     try:
         domain = extract_domain(url)
         
@@ -391,21 +437,64 @@ def get_download_options(url):
             'http_chunk_size': 1024 * 1024,
         }
         
-        # Site-specific optimizations
+        # Site-specific optimizations with cookie support
         if 'youtube' in domain:
             options.update({
                 'format': 'best[height<=720][protocol^=https]/best[height<=480]/best',
                 'concurrent_fragment_downloads': 4,
+                # YouTube usually doesn't need cookies for public videos
             })
         elif 'instagram' in domain:
             options.update({
-                'format': 'best/worst',
+                'format': 'best[height<=1080]/best',
                 'concurrent_fragment_downloads': 2,
             })
+            
+            # Add Instagram cookie support
+            instagram_cookies = get_instagram_cookies()
+            if instagram_cookies:
+                options['cookiejar'] = instagram_cookies
+                print("✅ Added Instagram cookies to download options")
+            else:
+                # Fallback to browser cookie extraction
+                options['cookiesfrombrowser'] = ('chrome',)
+                print("⚠️ Using cookiesfrombrowser fallback for Instagram")
+                
+        elif 'tiktok' in domain:
+            options.update({
+                'format': 'best[height<=720]/best',
+                'concurrent_fragment_downloads': 3,
+            })
+            
+            # Add TikTok cookie support
+            tiktok_cookies = get_tiktok_cookies()
+            if tiktok_cookies:
+                options['cookiejar'] = tiktok_cookies
+                print("✅ Added TikTok cookies to download options")
+            else:
+                # Fallback to browser cookie extraction
+                options['cookiesfrombrowser'] = ('chrome',)
+                print("⚠️ Using cookiesfrombrowser fallback for TikTok")
+                
+        elif 'facebook' in domain or 'fb.watch' in domain:
+            options.update({
+                'format': 'best[height<=720]/best',
+                'concurrent_fragment_downloads': 2,
+                'cookiesfrombrowser': ('chrome',),  # Facebook often needs cookies
+            })
+            
+        elif 'twitter' in domain or 'x.com' in domain:
+            options.update({
+                'format': 'best[height<=720]/best',
+                'concurrent_fragment_downloads': 3,
+                'cookiesfrombrowser': ('chrome',),  # Twitter/X often needs cookies
+            })
+            
         elif any(adult_site in domain for adult_site in ['pornhub', 'xvideos', 'xnxx', 'xhamster']):
             options.update({
                 'format': 'best[height<=720]/best',
                 'concurrent_fragment_downloads': 6,
+                'cookiesfrombrowser': ('chrome',),  # Adult sites often need cookies
             })
         
         return options
@@ -417,6 +506,7 @@ def get_download_options(url):
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
+            'cookiesfrombrowser': ('chrome',),  # Always try cookies as fallback
         }
 
 # ==================== VALIDATION AND SECURITY ====================

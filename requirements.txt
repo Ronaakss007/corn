@@ -27,4 +27,4 @@ flask>=2.3.0
 gunicorn>=21.2.0
 colorlog>=6.7.0
 validators>=0.22.0
-
+browser-cookie3>=0.19.1
