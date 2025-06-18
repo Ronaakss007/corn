@@ -1038,8 +1038,7 @@ async def start_command(client: Client, message: Message):
         user_id = message.from_user.id
         
         welcome_text = (
-            f"👋 <b>ʜᴇʏ {user_name}!</b>\n\n"
-            f"🤖 <blockquote><b>ɪ'ᴍ {Config.BOT_NAME}</b></blockquote>\n\n"
+            f"» <blockquote><b>ɪ'ᴍ {Config.BOT_NAME}</b></blockquote>\n\n"
             f"📥 <b>ɪ ᴄᴀɴ ᴅᴏᴡɴʟᴏᴀᴅ ᴠɪᴅᴇᴏs ғʀᴏᴍ:</b>\n"
             f"• ʏᴏᴜᴛᴜʙᴇ, ɪɴsᴛᴀɢʀᴀᴍ, ᴛɪᴋᴛᴏᴋ\n"
             f"• ᴘᴏʀɴʜᴜʙ, xᴠɪᴅᴇᴏs, xɴxx\n"
@@ -1049,14 +1048,14 @@ async def start_command(client: Client, message: Message):
         
         # Create inline keyboard with the requested button
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("ᴍᴀᴅᴇ ᴡɪᴛʜ 💓", url="https://t.me/shizukawachan")]
+            [InlineKeyboardButton("• ᴀʙᴏᴜᴛ", callback_data="about"),
+             InlineKeyboardButton("• ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ", url="https://t.me/shizukawachan")]
         ])
         
         # Send photo with caption instead of text message
         await message.reply_photo(
             photo=Config.FORCE_PIC,
             caption=welcome_text,
-            parse_mode=ParseMode.HTML,
             reply_markup=keyboard
         )
         
@@ -1064,17 +1063,55 @@ async def start_command(client: Client, message: Message):
         # Fallback to text message if photo fails
         try:
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("ᴍᴀᴅᴇ ᴡɪᴛʜ 💓", url="https://t.me/shizukawachan")]
+                [InlineKeyboardButton("» ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ", url="https://t.me/shizukawachan")]
             ])
             await message.reply_text(
                 welcome_text, 
-                parse_mode=ParseMode.HTML,
                 reply_markup=keyboard
             )
         except Exception as fallback_error:
             await message.reply_text("❌ <b>ᴇʀʀᴏʀ ᴏᴄᴄᴜʀʀᴇᴅ!</b>", parse_mode=ParseMode.HTML)
 
 
+@Client.on_callback_query(filters.regex("about"))
+async def about_callback(client: Client, callback_query):
+    """Handle about button callback"""
+    try:
+        bot_info = await client.get_me()
+        about_text = ("""<b>
+Tʜɪs ʙᴏᴛ’s sᴍᴀʀᴛ. Yᴏᴜʀs ᴄᴏᴜʟᴅ ʙᴇ sᴍᴀʀᴛᴇʀ.
+Cᴜsᴛᴏᴍ-ʙᴜɪʟᴛ. Oɴᴇ ᴏғ ᴀ ᴋɪɴᴅ.
+                      
+»  <blockquote>Mᴇssᴀɢᴇ ʙᴇʟᴏᴡ—ʟᴇᴛ’s ᴛᴜʀɴ ʏᴏᴜʀ ɪᴅᴇᴀ ɪɴᴛᴏ AI ʀᴇᴀʟɪᴛʏ. 🧬</b></blockquote>"""
+        )
+        
+        back_keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("• ʙᴀᴅ ʙɪᴛᴄʜ •", url = "t.me/nyxgenie")
+        ],
+        [
+            InlineKeyboardButton("ᴄʟᴏsᴇ", callback_data="close")
+        ]
+        ])
+        
+        await callback_query.edit_message_caption(
+            caption=about_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=back_keyboard
+        )
+        
+    except Exception as e:
+        print(f"Error in about callback: {e}")
+        await callback_query.answer("❌ ᴇʀʀᴏʀ ᴏᴄᴄᴜʀʀᴇᴅ!", show_alert=True)
+
+@Client.on_callback_query(filters.regex("close"))
+async def close_callback(client: Client, callback_query):
+    """Handle close button callback"""
+    try:
+        await callback_query.message.delete()
+        await callback_query.answer("✅ ᴄʟᴏsᴇᴅ!", show_alert=False)
+    except Exception as e:
+        print(f"Error in close callback: {e}")
+        await callback_query.answer("❌ ᴇʀʀᴏʀ ᴏᴄᴄᴜʀʀᴇᴅ!", show_alert=True)
 
 @Client.on_message(filters.command("help") & filters.private)
 async def help_command(client: Client, message: Message):

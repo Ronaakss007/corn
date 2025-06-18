@@ -80,18 +80,12 @@ async def handle_url_message(client: Client, message: Message):
         
         user_id = message.from_user.id
         
-        # Add production debugging
-        print(f"🔗 [PROD] Download handler called for user {user_id}")
-        print(f"📊 [PROD] Admin conversations: {list(admin_conversations.keys())}")
-        print(f"👤 [PROD] User is admin: {user_id in Config.ADMINS}")
-        
         # Check if message exists
         if not message.text:
             print(f"❌ [PROD] No message text for user {user_id}")
             return
             
         text = message.text.strip()
-        print(f"💬 [PROD] Message text: {text[:50]}...")
         
         # CRITICAL: Check admin conversation state FIRST before any processing
         if has_admin_conversation(user_id):
@@ -164,13 +158,13 @@ async def handle_url_message(client: Client, message: Message):
         await register_new_user(user_id, username, first_name)
         
         # Check if user already has active download
-        if user_id in active_downloads:
-            await message.reply_text(
-                "<b>❌ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ</b>\n\n"
-                "ʏᴏᴜ ᴀʟʀᴇᴀᴅʏ ʜᴀᴠᴇ ᴀɴ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ! ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ғᴏʀ ɪᴛ ᴛᴏ ᴄᴏᴍᴘʟᴇᴛᴇ.",
-                parse_mode=ParseMode.HTML
-            )
-            return
+        # if user_id in active_downloads:
+        #     await message.reply_text(
+        #         "<b>❌ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ</b>\n\n"
+        #         "ʏᴏᴜ ᴀʟʀᴇᴀᴅʏ ʜᴀᴠᴇ ᴀɴ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ! ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ғᴏʀ ɪᴛ ᴛᴏ ᴄᴏᴍᴘʟᴇᴛᴇ.",
+        #         parse_mode=ParseMode.HTML
+        #     )
+        #     return
         
         # Start download process
         active_downloads[user_id] = ProgressTracker()
@@ -181,7 +175,8 @@ async def handle_url_message(client: Client, message: Message):
         )
         await status_msg.edit_text("<b>!!</b>")
         await asyncio.sleep(0.3)
-        await status_msg.edit_text("<b>!!!</b>")
+        await status_msg.edit_text("<b>!?!</b>")
+        await asyncio.sleep(0.3)
         
         # Extract metadata and start download
         metadata = await get_video_metadata(url)
@@ -301,8 +296,7 @@ async def download_and_send(client, message, status_msg, url, user_id):
                     await status_msg.edit_text(
                         f"<b>✅ ᴜᴘʟᴏᴀᴅ sᴜᴄᴄᴇssғᴜʟ!</b>\n\n"
                         f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                        f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
-                        f"<b>📤 ᴄᴏᴘʏɪɴɢ ᴛᴏ ᴏᴛʜᴇʀ ᴄʜᴀɴɴᴇʟs...</b>",
+                        f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n",
                         parse_mode=ParseMode.HTML
                     )
                     
@@ -378,8 +372,9 @@ async def download_and_send(client, message, status_msg, url, user_id):
         # Delete the status message after everything is done
         if uploaded_successfully:
             try:
-                await asyncio.sleep(2)
+                await asyncio.sleep(0.5)
                 await status_msg.delete()
+                await message.delete()
             except Exception:
                 await status_msg.edit_text(
                     "<b>✅ ᴀʟʟ ᴅᴏɴᴇ!</b>",
@@ -633,11 +628,9 @@ async def upload_single_file(client, file_path, dump_id, progress_tracker, statu
 
 # ==================== ENHANCED FILE SENDING ====================
 
-# Replace the section around lines 533-570 with this:
 async def send_file_to_user_enhanced(client, message, dump_message, file_name, file_size, is_premium):
     """Enhanced file sending with all protection features including spoiler support"""
     try:
-        # Get file settings
         settings = await get_file_settings()
         
         protect_content = settings.get('protect_content', False)
@@ -645,23 +638,19 @@ async def send_file_to_user_enhanced(client, message, dump_message, file_name, f
         auto_delete = settings.get('auto_delete', False)
         auto_delete_time = settings.get('auto_delete_time', 300)
         inline_buttons = settings.get('inline_buttons', True)
-        spoiler_enabled = settings.get('spoiler_enabled', True)  # New setting
+        spoiler_enabled = settings.get('spoiler_enabled', False)
         
-        # Create caption if enabled
         caption = None
         if show_caption:
             caption = f"<b>{file_name}</b>\n<b> {format_bytes(file_size)}</b>"
         
-        # Create keyboard if enabled
         keyboard = None
         if inline_buttons:
             keyboard = await create_user_keyboard(is_premium)
         
-        # Get file info from dump message to determine type
         user_message = None
         
         try:
-            # Check what type of media the dump message contains
             if dump_message.video:
                 user_message = await client.send_video(
                     chat_id=message.chat.id,
@@ -725,7 +714,6 @@ async def send_file_to_user_enhanced(client, message, dump_message, file_name, f
                     thumb=dump_message.animation.thumbs[0].file_id if dump_message.animation.thumbs else None
                 )
             else:
-                # Fallback to copy_message if media type not supported
                 print("⚠️ Unknown media type, falling back to copy_message")
                 user_message = await client.copy_message(
                     chat_id=message.chat.id,
@@ -739,7 +727,6 @@ async def send_file_to_user_enhanced(client, message, dump_message, file_name, f
                 
         except Exception as e:
             print(f"❌ Error sending with direct method: {e}")
-            # Fallback to copy_message
             user_message = await client.copy_message(
                 chat_id=message.chat.id,
                 from_chat_id=DUMP_CHAT_IDS[0],
@@ -750,18 +737,16 @@ async def send_file_to_user_enhanced(client, message, dump_message, file_name, f
                 protect_content=protect_content
             )
         
-        # Send separate warning message if auto delete is enabled
         warning_message = None
         if auto_delete and user_message:
             warning_message = await message.reply_text(
-                f"<b>⚠️ ᴀᴜᴛᴏ ᴅᴇʟᴇᴛᴇ ᴡᴀʀɴɪɴɢ</b>\n\n"
+                f"<b>⚠️ ᴄᴏᴘʏʀɪɢʜᴛ ᴡᴀʀɴɪɴɢ</b>\n\n"
                 f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                f"<b>⏰ ᴛʜɪs ғɪʟᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ:</b> {format_time(auto_delete_time)}\n\n"
-                f"<i>💡 ᴅᴏᴡɴʟᴏᴀᴅ ɪᴛ ǫᴜɪᴄᴋʟʏ ʙᴇғᴏʀᴇ ɪᴛ's ʀᴇᴍᴏᴠᴇᴅ!</i>",
+                f"<b><blockquote>⏰ ᴛʜɪs ғɪʟᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ:</b> {format_time(auto_delete_time)}</blockquote>\n\n"
+                f"<i>💡 ғᴏʀᴡᴀʀᴅ ɪᴛ ǫᴜɪᴄᴋʟʏ ʙᴇғᴏʀᴇ ɪᴛ's ʀᴇᴍᴏᴠᴇᴅ..!</i>",
                 parse_mode=ParseMode.HTML
             )
             
-            # Schedule auto delete with notification update
             asyncio.create_task(auto_delete_message_with_notification(
                 client, 
                 message.chat.id, 
@@ -776,6 +761,7 @@ async def send_file_to_user_enhanced(client, message, dump_message, file_name, f
     except Exception as e:
         print(f"❌ Error sending enhanced file to user: {e}")
         return None
+
 
 async def auto_delete_message_with_notification(client, chat_id, file_message_id, warning_message_id, file_name, delay_seconds):
     """Auto delete message after specified time with notification update"""
@@ -865,9 +851,7 @@ async def update_progress(status_msg, user_id, url):
                 progress_text += f"<b>⏱️ ᴇᴛᴀ:</b> {eta_str}\n"
                 progress_text += f"<b>📁 ғɪʟᴇ:</b> <code>{os.path.basename(progress_tracker.filename)}</code>"
             else:
-                progress_text = f"<b>📥 {progress_tracker.status}</b>\n\n"
-                progress_text += f"<b>🔗 ᴜʀʟ:</b> <code>{url}</code>\n"
-                progress_text += f"<b>⏳ sᴛᴀᴛᴜs:</b> ᴀɴᴀʟʏᴢɪɴɢ ᴠɪᴅᴇᴏ..."
+                progress_text = f"<b>» sᴛᴀʀᴛɪɴɢ...</b>"
             
             await safe_edit_message(status_msg, progress_text, ParseMode.HTML)
             await asyncio.sleep(3)

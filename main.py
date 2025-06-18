@@ -1,90 +1,53 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-#                           YT-DLP LEECH BOT - MAIN FILE
-# ═══════════════════════════════════════════════════════════════════════════════
-# Author: Your Name
-# Description: Advanced YT-DLP downloader bot
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#                                   IMPORTS
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# Standard library imports
 import os
 import sys
 import asyncio
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
 from threading import Thread
 import signal
 
-# Third-party imports
 import pytz
 from pyrogram import Client
 from pyrogram.enums import ParseMode
 from flask import Flask
 import pyrogram.utils
 
-# Local imports
 from config import Config
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#                                CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# Configure Pyrogram settings
 pyrogram.utils.MIN_CHANNEL_ID = -1009147483647
 
 user_client = None
-# Server configuration
-FLASK_PORT = 8087  # Flask keep-alive port
+FLASK_PORT = 8087
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#                              FLASK KEEP-ALIVE SERVER
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# Initialize Flask app for keep-alive functionality
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def home():
-    """Health check endpoint for keep-alive service"""
-    return "🤖 YT-DLP Leech Bot is running!"
+    return "🤖 ᴠɪᴅxᴛʀᴀᴄᴛᴏʀ ɪs ʀᴜɴɴɪɴɢ!"
 
 @flask_app.route('/status')
 def status():
-    """Bot status endpoint"""
     return {
         "status": "active",
         "timestamp": datetime.now().isoformat(),
-        "service": "YT-DLP Leech Bot"
+        "service": "ᴠɪᴅxᴛʀᴀᴄᴛᴏʀ ʙᴏᴛ"
     }
 
 def run_flask():
-    """Run Flask keep-alive server"""
     try:
-        flask_app.run(
-            host="0.0.0.0",
-            port=FLASK_PORT,
-            debug=False,
-            use_reloader=False
-        )
+        flask_app.run(host="0.0.0.0", port=FLASK_PORT, debug=False, use_reloader=False)
     except Exception as e:
-        print(f"❌ Flask server error: {e}")
+        print(f"❌ ғʟᴀsᴋ sᴇʀᴠᴇʀ ᴇʀʀᴏʀ: {e}")
 
 def keep_alive():
-    """Start Flask keep-alive server in separate thread"""
     thread = Thread(target=run_flask, daemon=True)
     thread.start()
-    print(f"✅ Keep-alive server started on port {FLASK_PORT}")
+    print(f"✅ ᴋᴇᴇᴘ-ᴀʟɪᴠᴇ sᴇʀᴠᴇʀ sᴛᴀʀᴛᴇᴅ ᴏɴ ᴘᴏʀᴛ {FLASK_PORT}")
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#                                UTILITY FUNCTIONS
-# ═══════════════════════════════════════════════════════════════════════════════
 async def initialize_user_client():
-    """Initialize user client for faster uploads"""
     global user_client
     try:
-        if Config.USER_SESSION:  # Add this to config.py
+        if Config.USER_SESSION:
             user_client = Client(
                 "user_session",
                 session_string=Config.USER_SESSION,
@@ -92,135 +55,84 @@ async def initialize_user_client():
                 api_hash=Config.API_HASH
             )
             await user_client.start()
-            print("✅ User session initialized for faster uploads")
+            print("✅ ᴜsᴇʀ sᴇssɪᴏɴ ɪɴɪᴛɪᴀʟɪᴢᴇᴅ")
         else:
-            print("⚠️ No user session provided, using bot for uploads")
+            print("⚠️ ɴᴏ ᴜsᴇʀ sᴇssɪᴏɴ ᴘʀᴏᴠɪᴅᴇᴅ")
     except Exception as e:
-        print(f"❌ Failed to initialize user session: {e}")
+        print(f"❌ ғᴀɪʟᴇᴅ ᴛᴏ ɪɴɪᴛɪᴀʟɪᴢᴇ ᴜsᴇʀ sᴇssɪᴏɴ: {e}")
         user_client = None
 
 def get_indian_time():
-    """
-    Get current time in Indian Standard Time (IST)
-    
-    Returns:
-        datetime: Current IST datetime object
-    """
     ist_timezone = pytz.timezone("Asia/Kolkata")
     return datetime.now(ist_timezone)
 
 def setup_directories():
-    """Setup required directories"""
     try:
         os.makedirs(Config.DOWNLOAD_DIR, exist_ok=True)
-        print(f"✅ Download directory created: {Config.DOWNLOAD_DIR}")
+        print(f"✅ ᴅᴏᴡɴʟᴏᴀᴅ ᴅɪʀᴇᴄᴛᴏʀʏ ᴄʀᴇᴀᴛᴇᴅ: {Config.DOWNLOAD_DIR}")
         return True
     except Exception as e:
-        print(f"❌ Error creating directories: {e}")
+        print(f"❌ ᴇʀʀᴏʀ ᴄʀᴇᴀᴛɪɴɢ ᴅɪʀᴇᴄᴛᴏʀɪᴇs: {e}")
         return False
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#                                  BOT CLASS
-# ═══════════════════════════════════════════════════════════════════════════════
-
 class Bot(Client):
-    """
-    Main Bot class extending Pyrogram Client
-    Handles bot initialization, startup, and shutdown procedures
-    """
-    
     def __init__(self):
-        """Initialize the bot with configuration parameters"""
         super().__init__(
             name="ytdl_bot",
             api_hash=Config.API_HASH,
             api_id=Config.API_ID,
-            plugins={"root": "commands"},  # Auto-load all command plugins
+            plugins={"root": "commands"},
             bot_token=Config.BOT_TOKEN
         )
         self.is_running = False
 
     async def start(self):
-        """
-        Bot startup procedure
-        - Setup directories
-        - Get bot info
-        - Send startup notification
-        """
         try:
             await super().start()
             self.is_running = True
             
-            # Get bot information
             bot_info = await self.get_me()
             self.username = bot_info.username
             self.uptime = get_indian_time()
             
-            print(f"🚀 Starting {bot_info.first_name} (@{bot_info.username})")
-            
-            # ═══════════════════════════════════════════════════════════════════════
-            #                        DIRECTORY SETUP
-            # ═══════════════════════════════════════════════════════════════════════
+            print(f"🚀 sᴛᴀʀᴛɪɴɢ {bot_info.first_name} (@{bot_info.username})")
             
             if not setup_directories():
-                print("❌ Failed to setup directories")
+                print("❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇᴛᴜᴘ ᴅɪʀᴇᴄᴛᴏʀɪᴇs")
                 await self.stop()
                 return False
             
-            # ═══════════════════════════════════════════════════════════════════════
-            #                         FINAL CONFIGURATION
-            # ═══════════════════════════════════════════════════════════════════════
-            
-            # Set default parse mode
             self.set_parse_mode(ParseMode.HTML)
-            
-            # Send startup notification to admin
             await self._send_startup_notification()
             
-            print("🎉 Bot is now fully operational!")
+            print("🎉 ʙᴏᴛ ɪs ɴᴏᴡ ғᴜʟʟʏ ᴏᴘᴇʀᴀᴛɪᴏɴᴀʟ!")
             return True
             
         except Exception as e:
-            print(f"❌ Failed to start bot: {e}")
+            print(f"❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴛᴀʀᴛ ʙᴏᴛ: {e}")
             self.is_running = False
             return False
 
     async def stop(self, *args):
-        """
-        Bot shutdown procedure
-        """
         if self.is_running:
             try:
                 await super().stop()
                 self.is_running = False
-                print("🛑 Bot stopped gracefully")
+                print("🛑 ʙᴏᴛ sᴛᴏᴘᴘᴇᴅ ɢʀᴀᴄᴇғᴜʟʟʏ")
             except Exception as e:
-                print(f"❌ Error during bot shutdown: {e}")
-        else:
-            print("🛑 Bot is already stopped")
-
-    async def start_bot():
-        await initialize_user_client()
+                print(f"❌ ᴇʀʀᴏʀ ᴅᴜʀɪɴɢ ʙᴏᴛ sʜᴜᴛᴅᴏᴡɴ: {e}")
 
     def run(self):
-        """
-        Main bot execution method
-        - Setup event loop
-        - Handle graceful shutdown
-        - Manage exceptions
-        """
         loop = None
         try:
-            # Get or create event loop
             try:
                 loop = asyncio.get_event_loop()
             except RuntimeError:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
             
-            # Setup signal handlers for graceful shutdown
             def signal_handler(signum, frame):
-                print(f"\n🛑 Received signal {signum}, shutting down...")
+                print(f"\n🛑 ʀᴇᴄᴇɪᴠᴇᴅ sɪɢɴᴀʟ {signum}, sʜᴜᴛᴛɪɴɢ ᴅᴏᴡɴ...")
                 if self.is_running:
                     loop.create_task(self.stop())
                 loop.stop()
@@ -228,93 +140,69 @@ class Bot(Client):
             signal.signal(signal.SIGINT, signal_handler)
             signal.signal(signal.SIGTERM, signal_handler)
             
-            # Start the bot
             startup_success = loop.run_until_complete(self.start())
             
             if not startup_success:
-                print("❌ Bot startup failed")
+                print("❌ ʙᴏᴛ sᴛᴀʀᴛᴜᴘ ғᴀɪʟᴇᴅ")
                 return
                 
-            print("🔄 Bot event loop started")
-            
-            # Keep running until interrupted
+            print("🔄 ʙᴏᴛ ᴇᴠᴇɴᴛ ʟᴏᴏᴘ sᴛᴀʀᴛᴇᴅ")
             loop.run_forever()
             
         except KeyboardInterrupt:
-            print("\n🛑 Keyboard interrupt received, shutting down...")
+            print("\n🛑 ᴋᴇʏʙᴏᴀʀᴅ ɪɴᴛᴇʀʀᴜᴘᴛ ʀᴇᴄᴇɪᴠᴇᴅ")
             
         except Exception as e:
-            print(f"❌ Bot crashed: {e}")
+            print(f"❌ ʙᴏᴛ ᴄʀᴀsʜᴇᴅ: {e}")
             
         finally:
-            # Ensure clean shutdown
             try:
                 if loop and not loop.is_closed():
                     if self.is_running:
                         loop.run_until_complete(self.stop())
                     loop.close()
-                print("✅ Cleanup completed")
+                print("✅ ᴄʟᴇᴀɴᴜᴘ ᴄᴏᴍᴘʟᴇᴛᴇᴅ")
             except Exception as e:
-                print(f"❌ Error during cleanup: {e}")
+                print(f"❌ ᴇʀʀᴏʀ ᴅᴜʀɪɴɢ ᴄʟᴇᴀɴᴜᴘ: {e}")
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    #                            PRIVATE METHODS
-    # ═══════════════════════════════════════════════════════════════════════════
-    
     async def _send_startup_notification(self):
-        """Send startup notification to bot admin"""
         try:
-            startup_message = (
-                f"<b>"
-                f"🤖 ᴠɪᴅxᴛʀᴀᴄᴛᴏʀ Bot Started Successfully...!\n\n"
-                f"<blockquote expandable>⏰ Started: {self.uptime.strftime('%Y-%m-%d %H:%M:%S IST')}\n"
-                f"🆔 Bot ID: {(await self.get_me()).id}\n"
-                f"👨‍💻 Bot Username: @{self.username}\n\n"
-                f"💝 Made with love by ❰ ×× <a href='https://t.me/shizukawachan'>sʜɪᴢᴜᴋᴀ</a> -//- ❱\n"
-                f"</blockquote></b>"
-            )
+            startup_message = f"» <b>ᴠɪᴅxᴛʀᴀᴄᴛᴏʀ sᴛᴀʀᴛᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!</b>\n\n⏰ <i>sᴛᴀʀᴛᴇᴅ:</i> {self.uptime.strftime('%Y-%m-%d %H:%M:%S IST')}\n\n😴 <i>ᴅɪᴅ ɴᴏᴛ sʟᴇᴇᴘ ᴛɪʟʟ ɴᴏᴡ...</i>"
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("» ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ", url="https://t.me/nyxgenie"),
+                 InlineKeyboardButton("» ᴜᴘᴅᴀᴛᴇs", url="https://t.me/shizukawachan")]
+            ])
             
-            # Send to first admin user
             if Config.ADMIN_USERS:
-                await self.send_message(
+                await self.send_photo(
                     chat_id=Config.ADMIN_USERS[0],
-                    text=startup_message
+                    photo=Config.FORCE_PIC,
+                    caption=startup_message,
+                    reply_markup=keyboard
                 )
-                print("✅ Startup notification sent to admin")
+                print("✅ sᴛᴀʀᴛᴜᴘ ɴᴏᴛɪғɪᴄᴀᴛɪᴏɴ sᴇɴᴛ")
                 
         except Exception as e:
-            print(f"❌ Failed to send startup notification: {e}")
-
-
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#                                MAIN EXECUTION
-# ═══════════════════════════════════════════════════════════════════════════════
+            print(f"❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇɴᴅ sᴛᴀʀᴛᴜᴘ ɴᴏᴛɪғɪᴄᴀᴛɪᴏɴ: {e}")
 
 def main():
-    """Main function to initialize and run the bot"""
-    print("🚀 Initializing YT-DLP Leech Bot...")
+    print("🚀 ɪɴɪᴛɪᴀʟɪᴢɪɴɢ ᴠɪᴅxᴛʀᴀᴄᴛᴏʀ ʙᴏᴛ...")
     print("=" * 50)
     
-    # Print configuration summary
     Config.print_config()
     print("=" * 50)
     
-    # Validate configuration
     config_errors = Config.validate_config()
     if config_errors:
-        print("❌ Configuration errors found:")
+        print("❌ ᴄᴏɴғɪɢᴜʀᴀᴛɪᴏɴ ᴇʀʀᴏʀs ғᴏᴜɴᴅ:")
         for error in config_errors:
             print(f"   - {error}")
         sys.exit(1)
     
-    print("✅ Configuration validated successfully")
+    print("✅ ᴄᴏɴғɪɢᴜʀᴀᴛɪᴏɴ ᴠᴀʟɪᴅᴀᴛᴇᴅ")
     
-    # Start keep-alive server
     keep_alive()
     
-    # Initialize and run the bot
     bot = Bot()
     bot.run()
 
