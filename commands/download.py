@@ -281,13 +281,8 @@ async def download_and_send(client, message, status_msg, url, user_id):
                 
                 # Check file size
                 if file_size > 2 * 1024 * 1024 * 1024:
-                    await message.reply_text(
-                        f"<b>❌ ғɪʟᴇ ᴛᴏᴏ ʟᴀʀɢᴇ:</b> {file_name}",
-                        parse_mode=ParseMode.HTML
-                    )
-                    continue
                 
-                print(f"📤 Starting upload: {file_name} ({format_bytes(file_size)})")
+                    print(f"ℹ️ Large file detected: {file_name} ({format_bytes(file_size)}). Will be split before upload.")
                 
                 # Upload to first dump channel
                 dump_message = await upload_to_dump(client, file_path, DUMP_CHAT_IDS[0], progress_tracker, status_msg)
@@ -632,24 +627,19 @@ async def send_file_to_user_enhanced(client, message, dump_message, file_name, f
     """Enhanced file sending with all protection features including spoiler support"""
     try:
         settings = await get_file_settings()
-        
+
         protect_content = settings.get('protect_content', False)
         show_caption = settings.get('show_caption', True)
         auto_delete = settings.get('auto_delete', False)
         auto_delete_time = settings.get('auto_delete_time', 300)
         inline_buttons = settings.get('inline_buttons', True)
         spoiler_enabled = settings.get('spoiler_enabled', False)
-        
-        caption = None
-        if show_caption:
-            caption = f"<b>{file_name}</b>\n<b> {format_bytes(file_size)}</b>"
-        
-        keyboard = None
-        if inline_buttons:
-            keyboard = await create_user_keyboard(is_premium)
-        
+
+        caption = f"<b>{file_name}</b>\n<b>{format_bytes(file_size)}</b>" if show_caption else None
+        keyboard = await create_user_keyboard(is_premium) if inline_buttons else None
+
         user_message = None
-        
+
         try:
             if dump_message.video:
                 user_message = await client.send_video(
@@ -674,6 +664,7 @@ async def send_file_to_user_enhanced(client, message, dump_message, file_name, f
                     parse_mode=ParseMode.HTML if caption else None,
                     reply_markup=keyboard,
                     protect_content=protect_content,
+                    # has_spoiler is not supported here
                     thumb=dump_message.document.thumbs[0].file_id if dump_message.document.thumbs else None
                 )
             elif dump_message.audio:
@@ -724,7 +715,7 @@ async def send_file_to_user_enhanced(client, message, dump_message, file_name, f
                     reply_markup=keyboard,
                     protect_content=protect_content
                 )
-                
+
         except Exception as e:
             print(f"❌ Error sending with direct method: {e}")
             user_message = await client.copy_message(
@@ -736,28 +727,28 @@ async def send_file_to_user_enhanced(client, message, dump_message, file_name, f
                 reply_markup=keyboard,
                 protect_content=protect_content
             )
-        
-        warning_message = None
+
+        # Handle auto delete with warning
         if auto_delete and user_message:
             warning_message = await message.reply_text(
                 f"<b>⚠️ ᴄᴏᴘʏʀɪɢʜᴛ ᴡᴀʀɴɪɴɢ</b>\n\n"
                 f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                f"<b><blockquote>⏰ ᴛʜɪs ғɪʟᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ:</b> {format_time(auto_delete_time)}</blockquote>\n\n"
+                f"<blockquote><b>⏰ ᴛʜɪs ғɪʟᴇ ᴡɪʟʟ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ ɪɴ:</b> {format_time(auto_delete_time)}</blockquote>\n\n"
                 f"<i>💡 ғᴏʀᴡᴀʀᴅ ɪᴛ ǫᴜɪᴄᴋʟʏ ʙᴇғᴏʀᴇ ɪᴛ's ʀᴇᴍᴏᴠᴇᴅ..!</i>",
                 parse_mode=ParseMode.HTML
             )
-            
+
             asyncio.create_task(auto_delete_message_with_notification(
-                client, 
-                message.chat.id, 
-                user_message.id, 
-                warning_message.id if warning_message else None,
+                client,
+                message.chat.id,
+                user_message.id,
+                warning_message.id,
                 file_name,
                 auto_delete_time
             ))
-        
+
         return user_message
-        
+
     except Exception as e:
         print(f"❌ Error sending enhanced file to user: {e}")
         return None
