@@ -375,7 +375,7 @@ async def create_user_keyboard(is_premium=False):
 # ==================== DOWNLOAD UTILITIES ====================
 
 def get_download_options(url):
-    """Get download options based on URL"""
+    """Get download options based on URL with Instagram-specific headers"""
     try:
         domain = extract_domain(url)
         
@@ -399,13 +399,57 @@ def get_download_options(url):
             })
         elif 'instagram' in domain:
             options.update({
-                'format': 'best/worst',
+                'format': 'best[height<=1080]/best/worst',
                 'concurrent_fragment_downloads': 2,
+                # Add headers to mimic browser behavior
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                },
+                # Try different extraction methods
+                'extractor_args': {
+                    'instagram': {
+                        'variant': 'base'
+                    }
+                }
+            })
+            print("🔧 Using Instagram-optimized headers and options")
+            
+        elif 'tiktok' in domain:
+            options.update({
+                'format': 'best[height<=720]/best',
+                'concurrent_fragment_downloads': 3,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                }
+            })
+        elif 'facebook' in domain or 'fb.watch' in domain:
+            options.update({
+                'format': 'best[height<=720]/best',
+                'concurrent_fragment_downloads': 2,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                }
+            })
+        elif 'twitter' in domain or 'x.com' in domain:
+            options.update({
+                'format': 'best[height<=720]/best',
+                'concurrent_fragment_downloads': 3,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                }
             })
         elif any(adult_site in domain for adult_site in ['pornhub', 'xvideos', 'xnxx', 'xhamster']):
             options.update({
                 'format': 'best[height<=720]/best',
                 'concurrent_fragment_downloads': 6,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                }
             })
         
         return options
@@ -417,7 +461,11 @@ def get_download_options(url):
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            }
         }
+
 
 # ==================== VALIDATION AND SECURITY ====================
 
