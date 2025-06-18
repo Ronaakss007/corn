@@ -6,13 +6,13 @@ from config import Config
 import os
 from database import *
 from datetime import datetime
+from helper_func import *
 
 OWNER_ID = int(os.environ.get("OWNER_ID", "7560922302"))
 OWNER_TAG = os.environ.get("OWNER_TAG", "shizukawachan")
 ADMIN_LIST = os.environ.get("ADMINS", "").split()
 ADMINS = [int(admin) for admin in ADMIN_LIST if admin.isdigit()]
 ADMINS.append(OWNER_ID)
-FORCE_PIC = os.environ.get("FORCE_PIC", "https://ibb.co/WNSk3Q6x")
 
 async def check_subscription(client: Client, message: Message) -> bool:
     """Check if user is subscribed to required channels"""
@@ -22,60 +22,76 @@ async def check_subscription(client: Client, message: Message) -> bool:
         REQUEST_SUB_CHANNELS = settings.get("REQUEST_SUB_CHANNELS", [])
         user_id = message.from_user.id
         
-        # Skip checks for admins
         if user_id in ADMINS:
             return True
         
-        # If no channels configured, allow access
         if not FORCE_SUB_CHANNELS and not REQUEST_SUB_CHANNELS:
             return True
             
-        # Initialize variables to track which channels the user needs to join
         force_channels_to_join = []
         request_channels_to_join = []
         
         # Check force sub channels
-        for channel in FORCE_SUB_CHANNELS:
+        for channel_data in FORCE_SUB_CHANNELS:
             try:
-                member = await client.get_chat_member(channel, user_id)
+                if isinstance(channel_data, dict):
+                    channel_id = channel_data.get('id')
+                    channel_status = channel_data.get('status', 'active')
+                    
+                    if channel_status == 'error':
+                        print(f"⚠️ Skipping force channel with error: {channel_id}")
+                        continue
+                else:
+                    channel_id = channel_data
+                
+                member = await client.get_chat_member(channel_id, user_id)
                 if member.status not in [enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.MEMBER]:
-                    force_channels_to_join.append(channel)
+                    force_channels_to_join.append(channel_data)
+                    
             except UserNotParticipant:
-                force_channels_to_join.append(channel)
+                force_channels_to_join.append(channel_data)
             except Exception as e:
-                force_channels_to_join.append(channel)
+                print(f"❌ Error checking force channel {channel_id}: {e}")
+                force_channels_to_join.append(channel_data)
                 
         # Check request channels
-        for channel in REQUEST_SUB_CHANNELS:
+        for channel_data in REQUEST_SUB_CHANNELS:
             try:
-                # Convert channel to int for comparison
-                channel_id = int(channel) if isinstance(channel, str) and channel.lstrip('-').isdigit() else channel
+                if isinstance(channel_data, dict):
+                    channel_id = channel_data.get('id')
+                    channel_status = channel_data.get('status', 'active')
+                    
+                    if channel_status == 'error':
+                        print(f"⚠️ Skipping request channel with error: {channel_id}")
+                        continue
+                else:
+                    channel_id = channel_data
                 
-                # First check if user is already a member
+                if isinstance(channel_id, str) and channel_id.lstrip('-').isdigit():
+                    channel_id_int = int(channel_id)
+                else:
+                    channel_id_int = channel_id
+                
                 try:
-                    member = await client.get_chat_member(channel, user_id)
+                    member = await client.get_chat_member(channel_id, user_id)
                     if member.status in [enums.ChatMemberStatus.OWNER, enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.MEMBER]:
-                        # Remove any pending request since user is now a member
-                        await remove_join_request(user_id, channel_id)
+                        await remove_join_request(user_id, channel_id_int)
                         continue
                 except UserNotParticipant:
                     pass
                 
-                # Check if user has a pending request
-                if await has_pending_request(user_id, channel_id):
+                if await has_pending_request(user_id, channel_id_int):
                     continue
                     
-                # User needs to request to join this channel
-                request_channels_to_join.append(channel)
+                request_channels_to_join.append(channel_data)
                 
             except Exception as e:
-                request_channels_to_join.append(channel)
+                print(f"❌ Error checking request channel {channel_id}: {e}")
+                request_channels_to_join.append(channel_data)
         
-        # If user has joined all channels, proceed
         if not force_channels_to_join and not request_channels_to_join:
             return True
             
-        # User needs to join channels - prepare buttons
         force_text = (
             f"⚠️ ʜᴇʏ, {message.from_user.mention} 🚀\n\n"
             "ʏᴏᴜ ʜᴀᴠᴇɴ'ᴛ ᴊᴏɪɴᴇᴅ ᴄʜᴀɴɴᴇʟs ʏᴇᴛ. ᴘʟᴇᴀsᴇ ᴊᴏɪɴ ᴛʜᴇ ᴄʜᴀɴɴᴇʟs ʙᴇʟᴏᴡ, ᴛʜᴇɴ ᴛʀʏ ᴀɢᴀɪɴ.. !\n\n"
@@ -85,30 +101,77 @@ async def check_subscription(client: Client, message: Message) -> bool:
         buttons = []
         temp_buttons = []
         
-        # Add FORCE-JOIN CHANNELS buttons
-        for channel in force_channels_to_join:
+        # Add FORCE-JOIN CHANNELS buttons using stored links
+        for channel_data in force_channels_to_join:
             try:
-                chat = await client.get_chat(channel)
-                invite_link = await client.export_chat_invite_link(channel)
+                if isinstance(channel_data, dict):
+                    channel_id = channel_data.get('id')
+                    stored_link = channel_data.get('invite_link')
+                else:
+                    channel_id = channel_data
+                    stored_link = None
+                
+                chat = await client.get_chat(channel_id)
+                
+                # Use stored link if available
+                if stored_link:
+                    invite_link = stored_link
+                else:
+                    # Fallback: try to get new link
+                    try:
+                        invite_link = await client.export_chat_invite_link(channel_id)
+                    except Exception:
+                        if chat.username:
+                            invite_link = f"https://t.me/{chat.username}"
+                        else:
+                            clean_id = str(channel_id).replace('-100', '')
+                            invite_link = f"https://t.me/c/{clean_id}"
+                
                 btn = InlineKeyboardButton(f"👾 {chat.title}", url=invite_link)
                 temp_buttons.append(btn)
                 if len(temp_buttons) == 2:
                     buttons.append(temp_buttons)
                     temp_buttons = []
+                    
             except Exception as e:
+                print(f"❌ Error creating force channel button: {e}")
                 continue
         
-        # Add REQUEST-JOIN CHANNELS buttons
-        for channel in request_channels_to_join:
+        # Add REQUEST-JOIN CHANNELS buttons using stored links
+        for channel_data in request_channels_to_join:
             try:
-                chat = await client.get_chat(channel)
-                invite_link = await client.create_chat_invite_link(channel, creates_join_request=True)
-                btn = InlineKeyboardButton(f"{chat.title}", url=invite_link.invite_link)
+                if isinstance(channel_data, dict):
+                    channel_id = channel_data.get('id')
+                    stored_link = channel_data.get('invite_link')
+                else:
+                    channel_id = channel_data
+                    stored_link = None
+                
+                chat = await client.get_chat(channel_id)
+                
+                # Use stored link if available
+                if stored_link:
+                    invite_link = stored_link
+                else:
+                    # Fallback: try to create request link
+                    try:
+                        link_obj = await client.create_chat_invite_link(channel_id, creates_join_request=True)
+                        invite_link = link_obj.invite_link
+                    except Exception:
+                        if chat.username:
+                            invite_link = f"https://t.me/{chat.username}"
+                        else:
+                            clean_id = str(channel_id).replace('-100', '')
+                            invite_link = f"https://t.me/c/{clean_id}"
+                
+                btn = InlineKeyboardButton(f"📝 {chat.title}", url=invite_link)
                 temp_buttons.append(btn)
                 if len(temp_buttons) == 2:
                     buttons.append(temp_buttons)
                     temp_buttons = []
+                    
             except Exception as e:
+                print(f"❌ Error creating request channel button: {e}")
                 continue
         
         # Add leftovers
@@ -125,13 +188,12 @@ async def check_subscription(client: Client, message: Message) -> bool:
         if buttons:
             try:
                 await message.reply_photo(
-                    photo=FORCE_PIC,
+                    photo=Config.FORCE_PIC,
                     caption=force_text,
                     reply_markup=InlineKeyboardMarkup(buttons),
                     quote=True
                 )
             except Exception as e:
-                # Fallback to text message
                 try:
                     await message.reply(
                         force_text,
@@ -144,7 +206,8 @@ async def check_subscription(client: Client, message: Message) -> bool:
         return False
         
     except Exception as e:
-        return True  # Allow access if there's an error
+        print(f"❌ Error in check_subscription: {e}")
+        return True
 
 @Client.on_chat_join_request()
 async def join_reqs(client: Client, message: ChatJoinRequest):
@@ -153,37 +216,40 @@ async def join_reqs(client: Client, message: ChatJoinRequest):
         settings = await get_settings()
         REQUEST_SUB_CHANNELS = settings.get("REQUEST_SUB_CHANNELS", [])
         
-        # Convert channel IDs to integers for comparison
         request_channel_ids = []
-        for channel in REQUEST_SUB_CHANNELS:
+        for channel_data in REQUEST_SUB_CHANNELS:
             try:
-                if isinstance(channel, str) and channel.startswith('@'):
-                    # Convert username to ID
-                    chat = await client.get_chat(channel)
+                if isinstance(channel_data, dict):
+                    channel_id = channel_data.get('id')
+                else:
+                    channel_id = channel_data
+                    
+                if isinstance(channel_id, str) and channel_id.startswith('@'):
+                    chat = await client.get_chat(channel_id)
                     request_channel_ids.append(chat.id)
                 else:
-                    request_channel_ids.append(int(channel))
+                    request_channel_ids.append(int(channel_id))
             except:
-                request_channel_ids.append(channel)
+                if isinstance(channel_data, dict):
+                    request_channel_ids.append(channel_data.get('id'))
+                else:
+                    request_channel_ids.append(channel_data)
         
-        # Only process requests for our channels
         if message.chat.id not in request_channel_ids:
             return
         
         user_id = message.from_user.id
         channel_id = message.chat.id
         
-        # Store the join request in the database
         await store_join_request(user_id, channel_id)
         
     except Exception as e:
-        pass
+        print(f"❌ Error in join_reqs: {e}")
 
 @Client.on_chat_member_updated()
 async def chat_member_updated(client: Client, update):
     """Handle when users join/leave channels"""
     try:
-        # Check if user joined
         if (update.new_chat_member and 
             update.new_chat_member.status in ["member", "administrator", "owner"] and
             (not update.old_chat_member or update.old_chat_member.status not in ["member", "administrator", "owner"])):
@@ -191,536 +257,7 @@ async def chat_member_updated(client: Client, update):
             user_id = update.from_user.id
             channel_id = update.chat.id
             
-            # Remove any pending request since user has joined
             await remove_join_request(user_id, channel_id)
             
     except Exception as e:
-        pass
-
-@Client.on_message(filters.command("start") & filters.private)
-async def start_command(client: Client, message: Message):
-    """Handle /start command with subscription check"""
-    try:
-        # Check subscription first
-        if not await check_subscription(client, message):
-            return
-            
-        user_name = message.from_user.first_name or "ᴜsᴇʀ"
-        user_id = message.from_user.id
-        
-        welcome_text = (
-            f"👋 <b>ʜᴇʏ {user_name}!</b>\n\n"
-            f"🤖 <b>ɪ'ᴍ {Config.BOT_NAME}</b>\n\n"
-            f"📥 <b>ɪ ᴄᴀɴ ᴅᴏᴡɴʟᴏᴀᴅ ᴠɪᴅᴇᴏs ғʀᴏᴍ:</b>\n"
-            f"• ʏᴏᴜᴛᴜʙᴇ, ɪɴsᴛᴀɢʀᴀᴍ, ᴛɪᴋᴛᴏᴋ\n"
-            f"• ᴘᴏʀɴʜᴜʙ, xᴠɪᴅᴇᴏs, xɴxx\n"
-            f"• ᴀɴᴅ 1000+ ᴄᴏʀɴ / ᴏᴛʜᴇʀ sɪᴛᴇs!\n\n"
-            f"🚀 <b>ᴊᴜsᴛ sᴇɴᴅ ᴍᴇ ᴀ ʟɪɴᴋ!</b>\n\n"
-        )
-        
-        # Create inline keyboard with the requested button
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("ᴍᴀᴅᴇ ᴡɪᴛʜ 💓", url="https://t.me/shizukawachan")]
-        ])
-        
-        # Send photo with caption instead of text message
-        await message.reply_photo(
-            photo=FORCE_PIC,
-            caption=welcome_text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=keyboard
-        )
-        
-    except Exception as e:
-        # Fallback to text message if photo fails
-        try:
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("ᴍᴀᴅᴇ ᴡɪᴛʜ 💓", url="https://t.me/shizukawachan")]
-            ])
-            await message.reply_text(
-                welcome_text, 
-                parse_mode=ParseMode.HTML,
-                reply_markup=keyboard
-            )
-        except Exception as fallback_error:
-            await message.reply_text("❌ <b>ᴇʀʀᴏʀ ᴏᴄᴄᴜʀʀᴇᴅ!</b>", parse_mode=ParseMode.HTML)
-
-# Channel management commands (Admin only)
-@Client.on_message(filters.command("addchannel") & filters.private)
-async def add_channel_command(client: Client, message: Message):
-    """Add channel to force subscription list"""
-    try:
-        user_id = message.from_user.id
-        
-        # Check if user is admin
-        if user_id not in ADMINS:
-            await message.reply_text("❌ <b>ʏᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴀᴜᴛʜᴏʀɪᴢᴇᴅ!</b>", parse_mode=ParseMode.HTML)
-            return
-        
-        # Parse command
-        command_parts = message.text.split()
-        if len(command_parts) < 3:
-            await message.reply_text(
-                "<b>📝 ᴜsᴀɢᴇ:</b>\n\n"
-                "<code>/addchannel [force/request] [channel_id]</code>\n\n"
-                "<b>ᴇxᴀᴍᴘʟᴇ:</b>\n"
-                "<code>/addchannel force -1001234567890</code>\n"
-                "<code>/addchannel request @yourchannel</code>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-        
-        channel_type = command_parts[1].lower()
-        channel_id = command_parts[2]
-        
-        if channel_type not in ['force', 'request']:
-            await message.reply_text("❌ <b>ɪɴᴠᴀʟɪᴅ ᴛʏᴘᴇ! ᴜsᴇ 'force' ᴏʀ 'request'</b>", parse_mode=ParseMode.HTML)
-            return
-        
-        # Get current settings
-        settings = await get_settings()
-        
-        if channel_type == 'force':
-            force_channels = settings.get("FORCE_SUB_CHANNELS", [])
-            if channel_id not in force_channels:
-                force_channels.append(channel_id)
-                settings["FORCE_SUB_CHANNELS"] = force_channels
-                await update_settings(settings)
-                await message.reply_text(f"✅ <b>ᴀᴅᴅᴇᴅ {channel_id} ᴛᴏ ғᴏʀᴄᴇ sᴜʙsᴄʀɪᴘᴛɪᴏɴ ʟɪsᴛ!</b>", parse_mode=ParseMode.HTML)
-            else:
-                await message.reply_text("❌ <b>ᴄʜᴀɴɴᴇʟ ᴀʟʀᴇᴀᴅʏ ɪɴ ʟɪsᴛ!</b>", parse_mode=ParseMode.HTML)
-        else:
-            request_channels = settings.get("REQUEST_SUB_CHANNELS", [])
-            if channel_id not in request_channels:
-                request_channels.append(channel_id)
-                settings["REQUEST_SUB_CHANNELS"] = request_channels
-                await update_settings(settings)
-                await message.reply_text(f"✅ <b>ᴀᴅᴅᴇᴅ {channel_id} ᴛᴏ ʀᴇǫᴜᴇsᴛ sᴜʙsᴄʀɪᴘᴛɪᴏɴ ʟɪsᴛ!</b>", parse_mode=ParseMode.HTML)
-            else:
-                await message.reply_text("❌ <b>ᴄʜᴀɴɴᴇʟ ᴀʟʀᴇᴀᴅʏ ɪɴ ʟɪsᴛ!</b>", parse_mode=ParseMode.HTML)
-        
-    except Exception as e:
-        await message.reply_text("❌ <b>ᴇʀʀᴏʀ ᴀᴅᴅɪɴɢ ᴄʜᴀɴɴᴇʟ!</b>", parse_mode=ParseMode.HTML)
-
-@Client.on_message(filters.command("removechannel") & filters.private)
-async def remove_channel_command(client: Client, message: Message):
-    """Remove channel from subscription list"""
-    try:
-        user_id = message.from_user.id
-        
-        # Check if user is admin
-        if user_id not in ADMINS:
-            await message.reply_text("❌ <b>ʏᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴀᴜᴛʜᴏʀɪᴢᴇᴅ!</b>", parse_mode=ParseMode.HTML)
-            return
-        
-        # Parse command
-        command_parts = message.text.split()
-        if len(command_parts) < 3:
-            await message.reply_text(
-                "<b>📝 ᴜsᴀɢᴇ:</b>\n\n"
-                "<code>/removechannel [force/request] [channel_id]</code>\n\n"
-                "<b>ᴇxᴀᴍᴘʟᴇ:</b>\n"
-                "<code>/removechannel force -1001234567890</code>\n"
-                "<code>/removechannel request @yourchannel</code>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-        
-        channel_type = command_parts[1].lower()
-        channel_id = command_parts[2]
-        
-        if channel_type not in ['force', 'request']:
-            await message.reply_text("❌ <b>ɪɴᴠᴀʟɪᴅ ᴛʏᴘᴇ! ᴜsᴇ 'force' ᴏʀ 'request'</b>", parse_mode=ParseMode.HTML)
-            return
-        
-        # Get current settings
-        settings = await get_settings()
-        
-        if channel_type == 'force':
-            force_channels = settings.get("FORCE_SUB_CHANNELS", [])
-            if channel_id in force_channels:
-                force_channels.remove(channel_id)
-                settings["FORCE_SUB_CHANNELS"] = force_channels
-                await update_settings(settings)
-                await message.reply_text(f"✅ <b>ʀᴇᴍᴏᴠᴇᴅ {channel_id} ғʀᴏᴍ ғᴏʀᴄᴇ sᴜʙsᴄʀɪᴘᴛɪᴏɴ ʟɪsᴛ!</b>", parse_mode=ParseMode.HTML)
-            else:
-                await message.reply_text("❌ <b>ᴄʜᴀɴɴᴇʟ ɴᴏᴛ ғᴏᴜɴᴅ ɪɴ ʟɪsᴛ!</b>", parse_mode=ParseMode.HTML)
-        else:
-            request_channels = settings.get("REQUEST_SUB_CHANNELS", [])
-            if channel_id in request_channels:
-                request_channels.remove(channel_id)
-                settings["REQUEST_SUB_CHANNELS"] = request_channels
-                await update_settings(settings)
-                await message.reply_text(f"✅ <b>ʀᴇᴍᴏᴠᴇᴅ {channel_id} ғʀᴏᴍ ʀᴇǫᴜᴇsᴛ sᴜʙsᴄʀɪᴘᴛɪᴏɴ ʟɪsᴛ!</b>", parse_mode=ParseMode.HTML)
-            else:
-                await message.reply_text("❌ <b>ᴄʜᴀɴɴᴇʟ ɴᴏᴛ ғᴏᴜɴᴅ ɪɴ ʟɪsᴛ!</b>", parse_mode=ParseMode.HTML)
-        
-    except Exception as e:
-        await message.reply_text("❌ <b>ᴇʀʀᴏʀ ʀᴇᴍᴏᴠɪɴɢ ᴄʜᴀɴɴᴇʟ!</b>", parse_mode=ParseMode.HTML)
-
-@Client.on_message(filters.command("showchannels") & filters.private)
-async def show_channels_command(client: Client, message: Message):
-    """Show all subscription channels"""
-    try:
-        user_id = message.from_user.id
-        
-        # Check if user is admin
-        if user_id not in ADMINS:
-            await message.reply_text("❌ <b>ʏᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴀᴜᴛʜᴏʀɪᴢᴇᴅ!</b>", parse_mode=ParseMode.HTML)
-            return
-        
-        # Get current settings
-        settings = await get_settings()
-        force_channels = settings.get("FORCE_SUB_CHANNELS", [])
-        request_channels = settings.get("REQUEST_SUB_CHANNELS", [])
-        
-        channels_text = "<b>📋 sᴜʙsᴄʀɪᴘᴛɪᴏɴ ᴄʜᴀɴɴᴇʟs</b>\n\n"
-        
-        # Show force subscription channels
-        if force_channels:
-            channels_text += "<b>🔒 ғᴏʀᴄᴇ sᴜʙsᴄʀɪᴘᴛɪᴏɴ ᴄʜᴀɴɴᴇʟs:</b>\n"
-            for i, channel in enumerate(force_channels, 1):
-                try:
-                    chat = await client.get_chat(channel)
-                    channels_text += f"{i}. <code>{channel}</code> - {chat.title}\n"
-                except Exception as e:
-                    channels_text += f"{i}. <code>{channel}</code> - ᴇʀʀᴏʀ ɢᴇᴛᴛɪɴɢ ɪɴғᴏ\n"
-            channels_text += "\n"
-        else:
-            channels_text += "<b>🔒 ғᴏʀᴄᴇ sᴜʙsᴄʀɪᴘᴛɪᴏɴ ᴄʜᴀɴɴᴇʟs:</b> ɴᴏɴᴇ\n\n"
-        
-        # Show request subscription channels
-        if request_channels:
-            channels_text += "<b>📝 ʀᴇǫᴜᴇsᴛ sᴜʙsᴄʀɪᴘᴛɪᴏɴ ᴄʜᴀɴɴᴇʟs:</b>\n"
-            for i, channel in enumerate(request_channels, 1):
-                try:
-                    chat = await client.get_chat(channel)
-                    channels_text += f"{i}. <code>{channel}</code> - {chat.title}\n"
-                except Exception as e:
-                    channels_text += f"{i}. <code>{channel}</code> - ᴇʀʀᴏʀ ɢᴇᴛᴛɪɴɢ ɪɴғᴏ\n"
-            channels_text += "\n"
-        else:
-            channels_text += "<b>📝 ʀᴇǫᴜᴇsᴛ sᴜʙsᴄʀɪᴘᴛɪᴏɴ ᴄʜᴀɴɴᴇʟs:</b> ɴᴏɴᴇ\n\n"
-        
-        channels_text += (
-            "<b>💡 ᴄᴏᴍᴍᴀɴᴅs:</b>\n"
-            "• <code>/addchannel force [channel_id]</code>\n"
-            "• <code>/addchannel request [channel_id]</code>\n"
-            "• <code>/removechannel force [channel_id]</code>\n"
-            "• <code>/removechannel request [channel_id]</code>"
-        )
-        
-        await message.reply_text(channels_text, parse_mode=ParseMode.HTML)
-        
-    except Exception as e:
-        await message.reply_text("❌ <b>ᴇʀʀᴏʀ sʜᴏᴡɪɴɢ ᴄʜᴀɴɴᴇʟs!</b>", parse_mode=ParseMode.HTML)
-
-@Client.on_message(filters.command("help") & filters.private)
-async def help_command(client: Client, message: Message):
-    """Show help message"""
-    try:
-        user_id = message.from_user.id
-        
-        if user_id in ADMINS:
-            help_text = (
-                "<b>🤖 ʙᴏᴛ ʜᴇʟᴘ - ᴀᴅᴍɪɴ</b>\n\n"
-                "<b>👤 ᴜsᴇʀ ᴄᴏᴍᴍᴀɴᴅs:</b>\n"
-                "• /start - sᴛᴀʀᴛ ᴛʜᴇ ʙᴏᴛ\n"
-                "• /stats - sʜᴏᴡ ʙᴏᴛ sᴛᴀᴛɪsᴛɪᴄs\n"
-                "• /mystats - sʜᴏᴡ ʏᴏᴜʀ sᴛᴀᴛɪsᴛɪᴄs\n"
-                "• /history - sʜᴏᴡ ᴅᴏᴡɴʟᴏᴀᴅ ʜɪsᴛᴏʀʏ\n"
-                "• /leaderboard - sʜᴏᴡ ᴛᴏᴘ ᴜsᴇʀs\n\n"
-                "<b>👑 ᴀᴅᴍɪɴ ᴄᴏᴍᴍᴀɴᴅs:</b>\n"
-                "• /addchannel - ᴀᴅᴅ sᴜʙsᴄʀɪᴘᴛɪᴏɴ ᴄʜᴀɴɴᴇʟ\n"
-                "• /removechannel - ʀᴇᴍᴏᴠᴇ sᴜʙsᴄʀɪᴘᴛɪᴏɴ ᴄʜᴀɴɴᴇʟ\n"
-                "• /showchannels - sʜᴏᴡ ᴀʟʟ ᴄʜᴀɴɴᴇʟs\n\n"
-                "<b>📥 ᴅᴏᴡɴʟᴏᴀᴅ:</b>\n"
-                "sᴇɴᴅ ᴀɴʏ ᴠɪᴅᴇᴏ ʟɪɴᴋ ᴛᴏ ᴅᴏᴡɴʟᴏᴀᴅ!"
-            )
-        else:
-            help_text = (
-                "<b>🤖 ʙᴏᴛ ʜᴇʟᴘ</b>\n\n"
-                "<b>📋 ᴀᴠᴀɪʟᴀʙʟᴇ ᴄᴏᴍᴍᴀɴᴅs:</b>\n"
-                "• /start - sᴛᴀʀᴛ ᴛʜᴇ ʙᴏᴛ\n"
-                "• /stats - sʜᴏᴡ ʙᴏᴛ sᴛᴀᴛɪsᴛɪᴄs\n"
-                "• /history - sʜᴏᴡ ᴅᴏᴡɴʟᴏᴀᴅ ʜɪsᴛᴏʀʏ\n"
-                "• /leaderboard - sʜᴏᴡ ᴛᴏᴘ ᴜsᴇʀs\n"
-                "• /help - sʜᴏᴡ ᴛʜɪs ʜᴇʟᴘ\n\n"
-                "<b>📥 ʜᴏᴡ ᴛᴏ ᴜsᴇ:</b>\n"
-                "sɪᴍᴘʟʏ sᴇɴᴅ ᴍᴇ ᴀ ᴠɪᴅᴇᴏ ʟɪɴᴋ ғʀᴏᴍ:\n"
-                "• ʏᴏᴜᴛᴜʙᴇ, ɪɴsᴛᴀɢʀᴀᴍ, ᴛɪᴋᴛᴏᴋ\n"
-                "• ᴘᴏʀɴʜᴜʙ, xᴠɪᴅᴇᴏs, xɴxx\n"
-                "• ᴀɴᴅ 1000+ ᴏᴛʜᴇʀ sɪᴛᴇs!\n\n"
-                "<b>❓ ɴᴇᴇᴅ sᴜᴘᴘᴏʀᴛ?</b>\n"
-                "ᴊᴏɪɴ: https://t.me/shizukawachan"
-            )
-        
-        # Create inline keyboard
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("ᴍᴀᴅᴇ ᴡɪᴛʜ 💓", url="https://t.me/shizukawachan")]
-        ])
-        
-        await message.reply_text(help_text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
-        
-    except Exception as e:
-        await message.reply_text("❌ <b>ᴇʀʀᴏʀ sʜᴏᴡɪɴɢ ʜᴇʟᴘ!</b>", parse_mode=ParseMode.HTML)
-
-@Client.on_message(filters.command("ping") & filters.private)
-async def ping_command(client: Client, message: Message):
-    """Handle /ping command"""
-    try:
-        import time
-        start_time = time.time()
-        
-        # Send initial message
-        sent_message = await message.reply_text("🏓 ᴘɪɴɢɪɴɢ...")
-        
-        # Calculate response time
-        end_time = time.time()
-        response_time = (end_time - start_time) * 1000  # Convert to milliseconds
-        
-        # Update with final response
-        ping_text = (
-            f"🏓 <b>ᴘᴏɴɢ!</b>\n\n"
-            f"⚡ <b>ʀᴇsᴘᴏɴsᴇ ᴛɪᴍᴇ:</b> <code>{response_time:.2f}ᴍs</code>\n"
-        )
-        
-        await sent_message.edit_text(ping_text, parse_mode=ParseMode.HTML)
-        
-    except Exception as e:
-        await message.reply_text("❌ <b>ᴇʀʀᴏʀ</b>", parse_mode=ParseMode.HTML)
-
-@Client.on_message(filters.command("fixstats") & filters.private)
-async def fix_stats_command(client: Client, message: Message):
-    """Recalculate user stats from download history"""
-    try:
-        user_id = message.from_user.id
-        username = message.from_user.first_name or message.from_user.username or "Unknown"
-        
-        await message.reply_text("🔄 <b>ʀᴇᴄᴀʟᴄᴜʟᴀᴛɪɴɢ ʏᴏᴜʀ sᴛᴀᴛs...</b>", parse_mode=ParseMode.HTML)
-        
-        # Get all download history for this user
-        history = await get_user_download_history(user_id, 1000)  # Get more records
-        
-        if not history:
-            await message.reply_text(
-                "❌ <b>ɴᴏ ᴅᴏᴡɴʟᴏᴀᴅ ʜɪsᴛᴏʀʏ ғᴏᴜɴᴅ!</b>\n\n"
-                "ᴛʀʏ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ sᴏᴍᴇᴛʜɪɴɢ ғɪʀsᴛ.",
-                parse_mode=ParseMode.HTML
-            )
-            return
-        
-        # Calculate totals from history
-        total_downloads = len(history)
-        total_size = sum(item.get('file_size', 0) for item in history)
-        
-        # Calculate favorite sites
-        favorite_sites = {}
-        for item in history:
-            site = item.get('site', 'unknown')
-            if site in favorite_sites:
-                favorite_sites[site] += 1
-            else:
-                favorite_sites[site] = 1
-        
-        print(f"🔄 Recalculated stats for user {user_id}:")
-        print(f"   Total downloads: {total_downloads}")
-        print(f"   Total size: {total_size}")
-        print(f"   Favorite sites: {favorite_sites}")
-        
-        # Update user document with recalculated stats
-        from database import user_data
-        result = await user_data.update_one(
-            {'_id': user_id},
-            {
-                '$set': {
-                    'total_downloads': total_downloads,
-                    'total_size': total_size,
-                    'favorite_sites': favorite_sites,
-                    'username': username,
-                    'last_activity': datetime.now()
-                }
-            },
-            upsert=True
-        )
-        
-        print(f"✅ User update result: matched={result.matched_count}, modified={result.modified_count}")
-        
-        # Verify the update
-        updated_user = await get_user(user_id)
-        
-        def format_size(size_bytes):
-            if size_bytes == 0:
-                return "0 B"
-            size_names = ["B", "KB", "MB", "GB", "TB"]
-            import math
-            i = int(math.floor(math.log(size_bytes, 1024)))
-            p = math.pow(1024, i)
-            s = round(size_bytes / p, 2)
-            return f"{s} {size_names[i]}"
-        
-        success_text = (
-            "✅ <b>sᴛᴀᴛs ғɪxᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!</b>\n\n"
-            f"📥 <b>ᴛᴏᴛᴀʟ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {updated_user.get('total_downloads', 0)}\n"
-            f"💾 <b>ᴛᴏᴛᴀʟ sɪᴢᴇ:</b> {format_size(updated_user.get('total_size', 0))}\n"
-            f"🌐 <b>sɪᴛᴇs ᴛʀᴀᴄᴋᴇᴅ:</b> {len(updated_user.get('favorite_sites', {}))}\n\n"
-            f"<b>ʀᴇᴄᴀʟᴄᴜʟᴀᴛᴇᴅ ғʀᴏᴍ {len(history)} ʜɪsᴛᴏʀʏ ʀᴇᴄᴏʀᴅs</b>"
-        )
-        
-        await message.reply_text(success_text, parse_mode=ParseMode.HTML)
-        
-    except Exception as e:
-        print(f"❌ Error fixing stats: {e}")
-        import traceback
-        traceback.print_exc()
-        await message.reply_text(
-            f"❌ <b>ᴇʀʀᴏʀ ғɪxɪɴɢ sᴛᴀᴛs:</b> {str(e)}",
-            parse_mode=ParseMode.HTML
-        )
-
-@Client.on_message(filters.command("debuguser") & filters.private)
-async def debug_user_command(client: Client, message: Message):
-    """Debug user data in database"""
-    try:
-        user_id = message.from_user.id
-        
-        # Get raw user data from database
-        from database import user_data
-        user = await user_data.find_one({'_id': user_id})
-        
-        if not user:
-            await message.reply_text("❌ <b>ᴜsᴇʀ ɴᴏᴛ ғᴏᴜɴᴅ ɪɴ ᴅᴀᴛᴀʙᴀsᴇ!</b>", parse_mode=ParseMode.HTML)
-            return
-        
-        # Get download history count
-        history = await get_user_download_history(user_id, 1000)
-        history_count = len(history) if history else 0
-        
-        debug_text = (
-            f"<b>🔍 ᴅᴇʙᴜɢ ɪɴғᴏ ғᴏʀ ᴜsᴇʀ {user_id}</b>\n\n"
-            f"<b>📊 ᴅᴀᴛᴀʙᴀsᴇ ᴠᴀʟᴜᴇs:</b>\n"
-            f"• total_downloads: {user.get('total_downloads', 'NOT SET')}\n"
-            f"• total_size: {user.get('total_size', 'NOT SET')}\n"
-            f"• favorite_sites: {user.get('favorite_sites', 'NOT SET')}\n"
-            f"• username: {user.get('username', 'NOT SET')}\n"
-            f"• join_date: {user.get('join_date', 'NOT SET')}\n"
-            f"• last_activity: {user.get('last_activity', 'NOT SET')}\n\n"
-            f"<b>📋 ʜɪsᴛᴏʀʏ ʀᴇᴄᴏʀᴅs:</b> {history_count}\n\n"
-            f"<b>🔧 ʀᴀᴡ ᴅᴀᴛᴀ:</b>\n"
-            f"<code>{str(user)[:500]}...</code>"
-        )
-        
-        await message.reply_text(debug_text, parse_mode=ParseMode.HTML)
-        
-    except Exception as e:
-        print(f"❌ Error in debug user: {e}")
-        await message.reply_text(f"❌ <b>ᴇʀʀᴏʀ:</b> {str(e)}", parse_mode=ParseMode.HTML)
-
-
-@Client.on_message(filters.command("clearrequests") & filters.private)
-async def clear_requests_command(client: Client, message: Message):
-    """Clear pending join requests (Admin only)"""
-    try:
-        user_id = message.from_user.id
-        
-        # Check if user is admin
-        if user_id not in ADMINS:
-            await message.reply_text("❌ <b>ʏᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴀᴜᴛʜᴏʀɪᴢᴇᴅ!</b>", parse_mode=ParseMode.HTML)
-            return
-        
-        # Parse command
-        command_parts = message.text.split()
-        
-        if len(command_parts) == 1:
-            # Show usage
-            await message.reply_text(
-                "<b>📝 ᴜsᴀɢᴇ:</b>\n\n"
-                "<code>/clearrequests all</code> - Clear all pending requests\n"
-                "<code>/clearrequests [channel_id]</code> - Clear requests for specific channel\n"
-                "<code>/clearrequests [user_id]</code> - Clear requests for specific user\n"
-                "<code>/clearrequests [user_id] [channel_id]</code> - Clear specific request\n\n"
-                "<b>ᴇxᴀᴍᴘʟᴇs:</b>\n"
-                "<code>/clearrequests all</code>\n"
-                "<code>/clearrequests -1001234567890</code>\n"
-                "<code>/clearrequests 123456789</code>\n"
-                "<code>/clearrequests 123456789 -1001234567890</code>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-        
-        if command_parts[1].lower() == "all":
-            # Clear all pending requests
-            from database import join_requests
-            result = await join_requests.delete_many({"status": "pending"})
-            await message.reply_text(
-                f"✅ <b>ᴄʟᴇᴀʀᴇᴅ {result.deleted_count} ᴘᴇɴᴅɪɴɢ ʀᴇǫᴜᴇsᴛs!</b>",
-                parse_mode=ParseMode.HTML
-            )
-            
-        elif len(command_parts) == 2:
-            # Clear requests for specific channel or user
-            target_id = command_parts[1]
-            
-            try:
-                target_id = int(target_id)
-            except ValueError:
-                await message.reply_text("❌ <b>ɪɴᴠᴀʟɪᴅ ɪᴅ ғᴏʀᴍᴀᴛ!</b>", parse_mode=ParseMode.HTML)
-                return
-            
-            from database import join_requests
-            
-            # Check if it's a channel ID (negative) or user ID (positive)
-            if target_id < 0:
-                # Channel ID
-                result = await join_requests.delete_many({
-                    "channel_id": target_id,
-                    "status": "pending"
-                })
-                await message.reply_text(
-                    f"✅ <b>ᴄʟᴇᴀʀᴇᴅ {result.deleted_count} ᴘᴇɴᴅɪɴɢ ʀᴇǫᴜᴇsᴛs ғᴏʀ ᴄʜᴀɴɴᴇʟ {target_id}!</b>",
-                    parse_mode=ParseMode.HTML
-                )
-            else:
-                # User ID
-                result = await join_requests.delete_many({
-                    "user_id": target_id,
-                    "status": "pending"
-                })
-                await message.reply_text(
-                    f"✅ <b>ᴄʟᴇᴀʀᴇᴅ {result.deleted_count} ᴘᴇɴᴅɪɴɢ ʀᴇǫᴜᴇsᴛs ғᴏʀ ᴜsᴇʀ {target_id}!</b>",
-                    parse_mode=ParseMode.HTML
-                )
-                
-        elif len(command_parts) == 3:
-            # Clear specific request
-            try:
-                user_id_target = int(command_parts[1])
-                channel_id_target = int(command_parts[2])
-            except ValueError:
-                await message.reply_text("❌ <b>ɪɴᴠᴀʟɪᴅ ɪᴅ ғᴏʀᴍᴀᴛ!</b>", parse_mode=ParseMode.HTML)
-                return
-            
-            from database import join_requests
-            result = await join_requests.delete_many({
-                "user_id": user_id_target,
-                "channel_id": channel_id_target,
-                "status": "pending"
-            })
-            
-            if result.deleted_count > 0:
-                await message.reply_text(
-                    f"✅ <b>ᴄʟᴇᴀʀᴇᴅ ᴘᴇɴᴅɪɴɢ ʀᴇǫᴜᴇsᴛ ғᴏʀ ᴜsᴇʀ {user_id_target} ɪɴ ᴄʜᴀɴɴᴇʟ {channel_id_target}!</b>",
-                    parse_mode=ParseMode.HTML
-                )
-            else:
-                await message.reply_text(
-                    f"❌ <b>ɴᴏ ᴘᴇɴᴅɪɴɢ ʀᴇǫᴜᴇsᴛ ғᴏᴜɴᴅ ғᴏʀ ᴜsᴇʀ {user_id_target} ɪɴ ᴄʜᴀɴɴᴇʟ {channel_id_target}!</b>",
-                    parse_mode=ParseMode.HTML
-                )
-        else:
-            await message.reply_text("❌ <b>ɪɴᴠᴀʟɪᴅ ᴄᴏᴍᴍᴀɴᴅ ғᴏʀᴍᴀᴛ!</b>", parse_mode=ParseMode.HTML)
-        
-    except Exception as e:
-        print(f"❌ Error in clear requests command: {e}")
-        await message.reply_text("❌ <b>ᴇʀʀᴏʀ ᴄʟᴇᴀʀɪɴɢ ʀᴇǫᴜᴇsᴛs!</b>", parse_mode=ParseMode.HTML)
-
+        print(f"❌ Error in chat_member_updated: {e}")
