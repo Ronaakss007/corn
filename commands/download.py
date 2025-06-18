@@ -460,7 +460,7 @@ async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_ms
         )
         return None
 
-async def upload_single_file(client, user_id, file_path, dump_id, progress_tracker, status_msg, part_num=None, total_parts=None):
+async def upload_single_file(client, file_path, dump_id, progress_tracker, status_msg, part_num=None, total_parts=None):
     """Upload a single file with real-time progress tracking"""
     try:
         file_size = os.path.getsize(file_path)
@@ -527,17 +527,13 @@ async def upload_single_file(client, user_id, file_path, dump_id, progress_track
         
         # Start progress update task
         progress_task = asyncio.create_task(update_progress_task())
-
         
         # Create caption with metadata - NO INLINE KEYBOARD for dump channels
         metadata = progress_tracker.metadata
-        leecher = f"@{message.from_user.username}" if message.from_user.username else (message.from_user.first_name or "Unknown")
         if part_num and total_parts:
             caption = f"<b>{file_name}</b>\n<b>📦 Part {part_num}/{total_parts} | {format_bytes(file_size)}</b>\n\n"
         else:
-            caption = f"<b>{file_name}</b>| <b> {format_bytes(file_size)}</b>\n"
-
-        
+            caption = f"<b>{file_name}</b>\n<b> {format_bytes(file_size)}</b>\n\n"
         
         # Generate thumbnail for videos
         thumbnail_path = None
