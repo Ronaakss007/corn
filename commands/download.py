@@ -21,6 +21,8 @@ import sys
 from commands.basic import check_subscription
 from database import *
 from helper_func import *
+import mimetypes
+from pathlib import Path
 
 # Import admin conversations - ADD THIS LINE
 try:
@@ -395,15 +397,18 @@ async def download_and_send(client, message, status_msg, url, user_id):
 
 # ==================== UPLOAD FUNCTIONS ====================
 
+def is_video_file(file_path):
+    mime_type, _ = mimetypes.guess_type(file_path)
+    return mime_type and mime_type.startswith("video/")
+
 async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_msg):
-    """Upload file to dump channel with progress"""
     try:
         file_size = os.path.getsize(file_path)
         file_name = os.path.basename(file_path)
-        
-        # Check if file needs splitting
+
         if file_size > 1.98 * 1024 * 1024 * 1024:
             print(f"📦 File too large ({format_bytes(file_size)}), splitting...")
+
             await status_msg.edit_text(
                 f"<b>📦 sᴘʟɪᴛᴛɪɴɢ ʟᴀʀɢᴇ ғɪʟᴇ</b>\n\n"
                 f"<b>📁 ғɪʟᴇ:</b> {file_name}\n"
@@ -411,14 +416,20 @@ async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_ms
                 f"<b>⏳ sᴛᴀᴛᴜs:</b> sᴘʟɪᴛᴛɪɴɢ...",
                 parse_mode=ParseMode.HTML
             )
-            
-            file_chunks = split_file(file_path)
+
+            if is_video_file(file_path):
+                from helper_func import split_video
+                file_chunks = await split_video(file_path)
+            else:
+                from helper_func import split_file
+                file_chunks = split_file(file_path)
+
             uploaded_messages = []
-            
+
             for i, chunk_path in enumerate(file_chunks, 1):
                 chunk_size = os.path.getsize(chunk_path)
                 chunk_name = os.path.basename(chunk_path)
-                
+
                 await status_msg.edit_text(
                     f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {i}/{len(file_chunks)}</b>\n\n"
                     f"<b>📁 ғɪʟᴇ:</b> {chunk_name}\n"
@@ -426,29 +437,30 @@ async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_ms
                     f"<b>⏳ sᴛᴀᴛᴜs:</b> ᴜᴘʟᴏᴀᴅɪɴɢ...",
                     parse_mode=ParseMode.HTML
                 )
-                
+
                 chunk_msg = await upload_single_file(client, chunk_path, dump_id, progress_tracker, status_msg, i, len(file_chunks))
                 if chunk_msg:
                     uploaded_messages.append(chunk_msg)
-                
+
                 try:
                     os.remove(chunk_path)
-                except:
-                    pass
-            
+                except Exception as e:
+                    print(f"⚠️ Could not delete chunk {chunk_path}: {e}")
+
             return uploaded_messages[0] if uploaded_messages else None
         else:
             return await upload_single_file(client, file_path, dump_id, progress_tracker, status_msg)
-        
+
     except Exception as e:
         print(f"❌ Error uploading to dump: {e}")
         await status_msg.edit_text(
             f"<b>❌ ᴜᴘʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
-            f"<b>📁 ғɪʟᴇ:</b> <code>{os.path.basename(file_path)}</code>\n"
+            f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
             f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
             parse_mode=ParseMode.HTML
         )
         return None
+
 
 async def upload_single_file(client, file_path, dump_id, progress_tracker, status_msg, part_num=None, total_parts=None):
     """Upload a single file with real-time progress tracking"""

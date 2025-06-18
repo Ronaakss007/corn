@@ -7,6 +7,10 @@ import aiofiles
 from datetime import datetime
 from urllib.parse import urlparse
 from config import Config
+import math
+import subprocess
+from pathlib import Path
+from moviepy.editor import VideoFileClip
 
 # ==================== ADMIN CHECK ====================
 
@@ -178,34 +182,62 @@ async def generate_thumbnail(video_path, thumb_path, time_offset=10):
 
 # ==================== FILE UTILITIES ====================
 
-def split_file(file_path, chunk_size=1.98 * 1024 * 1024 * 1024):
-    """Split large file into chunks"""
+def get_video_duration(file_path):
+    """Return duration of the video in seconds"""
+    try:
+        clip = VideoFileClip(file_path)
+        return int(clip.duration)
+    except Exception as e:
+        print(f"❌ Error getting duration: {e}")
+        return 0
+
+def split_video(file_path, max_size=1.95 * 1024 * 1024 * 1024):
+    """Split video file into parts by duration if larger than max_size (1.95GB)"""
     try:
         file_size = os.path.getsize(file_path)
-        if file_size <= chunk_size:
+        if file_size <= max_size:
             return [file_path]
-        
+
+        duration = get_video_duration(file_path)
+        if duration <= 0:
+            return [file_path]
+
+        num_parts = math.ceil(file_size / max_size)
+        part_duration = duration // num_parts
+
         chunks = []
         chunk_num = 1
-        
-        with open(file_path, 'rb') as f:
-            while True:
-                chunk_data = f.read(int(chunk_size))
-                if not chunk_data:
-                    break
-                
-                chunk_path = f"{file_path}.part{chunk_num:03d}"
-                with open(chunk_path, 'wb') as chunk_file:
-                    chunk_file.write(chunk_data)
-                
-                chunks.append(chunk_path)
+
+        base_name = Path(file_path).stem
+        extension = Path(file_path).suffix
+
+        for i in range(num_parts):
+            start_time = i * part_duration
+            output_file = f"{base_name}.part{chunk_num:03d}{extension}"
+
+            cmd = [
+                "ffmpeg", "-i", file_path,
+                "-ss", str(start_time),
+                "-t", str(part_duration),
+                "-c", "copy",
+                "-avoid_negative_ts", "make_zero",
+                "-y", output_file
+            ]
+
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            if result.returncode == 0 and os.path.exists(output_file):
+                chunks.append(output_file)
                 chunk_num += 1
-        
-        return chunks
-        
+            else:
+                print(f"❌ Failed to split part {chunk_num}: {result.stderr.decode()}")
+
+        return chunks if chunks else [file_path]
+
     except Exception as e:
-        print(f"❌ Error splitting file: {e}")
+        print(f"❌ Error splitting video: {e}")
         return [file_path]
+
 
 def cleanup_files(directory):
     """Clean up files in directory"""
