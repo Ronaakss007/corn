@@ -1308,3 +1308,27 @@ async def mystats_command(client: Client, message: Message):
             "<b>❌ ᴇʀʀᴏʀ ʟᴏᴀᴅɪɴɢ ʏᴏᴜʀ sᴛᴀᴛɪsᴛɪᴄs</b>",
             parse_mode=ParseMode.HTML
         )
+
+import os
+from pyrogram import Client, filters
+
+@Client.on_message(filters.command("cleanup") & filters.private)
+async def cleanup_files(client, message):
+    user_id = message.from_user.id
+    download_dir = f"./downloads/"
+    
+    try:
+        if not os.path.exists(download_dir):
+            return await message.reply_text(f"📂 No download folder found for you.")
+
+        files = os.listdir(download_dir)
+        count = 0
+        for f in files:
+            file_path = os.path.join(download_dir, f)
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+                count += 1
+
+        await message.reply_text(f"🧹 Cleaned up {count} files in your download folder.")
+    except Exception as e:
+        await message.reply_text(f"❌ Failed to clean up files:\n`{e}`")
