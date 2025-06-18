@@ -80,20 +80,27 @@ async def handle_url_message(client: Client, message: Message):
         
         user_id = message.from_user.id
         
+        # Add production debugging
+        print(f"🔗 [PROD] Download handler called for user {user_id}")
+        print(f"📊 [PROD] Admin conversations: {list(admin_conversations.keys())}")
+        print(f"👤 [PROD] User is admin: {user_id in Config.ADMINS}")
+        
         # Check if message exists
         if not message.text:
+            print(f"❌ [PROD] No message text for user {user_id}")
             return
             
         text = message.text.strip()
+        print(f"💬 [PROD] Message text: {text[:50]}...")
         
         # CRITICAL: Check admin conversation state FIRST before any processing
         if has_admin_conversation(user_id):
-            print(f"🛑 User {user_id} is in admin conversation state - skipping URL handler completely")
+            print(f"🛑 [PROD] User {user_id} is in admin conversation state - skipping URL handler completely")
             return
         
         # Alternative check using direct dictionary access
         if user_id in admin_conversations:
-            print(f"🛑 User {user_id} found in admin_conversations - skipping URL handler")
+            print(f"🛑 [PROD] User {user_id} found in admin_conversations - skipping URL handler")
             return
         
         # Check URL indicators
@@ -103,21 +110,25 @@ async def handle_url_message(client: Client, message: Message):
         
         # If it's not a URL, let other handlers process it
         if not is_url:
-            print(f"📝 Text from user {user_id} is not a URL - letting other handlers process")
+            print(f"📝 [PROD] Text from user {user_id} is not a URL - letting other handlers process")
             return
         
         # Additional check: if it's a telegram link, it might be admin setting button URL
         if 't.me/' in text.lower() and user_id in Config.ADMINS:
-            print(f"⚠️ Admin {user_id} sent t.me link - might be setting button URL, double-checking admin state")
+            print(f"⚠️ [PROD] Admin {user_id} sent t.me link - might be setting button URL, double-checking admin state")
             # Give admin conversation handler priority for t.me links
-            await asyncio.sleep(0.1)  # Small delay to let admin handler process first
+            await asyncio.sleep(0.2)  # Increased delay for production
             if has_admin_conversation(user_id):
-                print(f"🛑 Confirmed: Admin {user_id} is in conversation - skipping download")
+                print(f"🛑 [PROD] Confirmed: Admin {user_id} is in conversation - skipping download")
+                return
+            # Double check again
+            if user_id in admin_conversations:
+                print(f"🛑 [PROD] Double-check: Admin {user_id} is in conversation - skipping download")
                 return
         
         # If user is admin and sent a URL, process it
         if user_id in Config.ADMINS:
-            print(f"🔗 Admin {user_id} sent URL: {text[:50]}... - Processing download")
+            print(f"🔗 [PROD] Admin {user_id} sent URL: {text[:50]}... - Processing download")
         else:
             # Check subscription for non-admins
             if not await check_subscription(client, message):
@@ -136,48 +147,16 @@ async def handle_url_message(client: Client, message: Message):
         
         # Skip processing t.me links as they're not downloadable
         if 't.me/' in url.lower():
-            print(f"⚠️ Skipping t.me link as it's not downloadable: {url}")
+            print(f"⚠️ [PROD] Skipping t.me link as it's not downloadable: {url}")
             return
+        
+        # Continue with download process...
+        print(f"🚀 [PROD] Starting download process for user {user_id}")
         
         # Normalize URL if needed
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
         
-        username = message.from_user.first_name or message.from_user.username or "Unknown"
-        first_name = message.from_user.first_name or ""
-        
-        # Register/update user in database
-        await register_new_user(user_id, username, first_name)
-        
-        # Check if user already has active download
-        if user_id in active_downloads:
-            await message.reply_text(
-                "<b>❌ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ</b>\n\n"
-                "ʏᴏᴜ ᴀʟʀᴇᴀᴅʏ ʜᴀᴠᴇ ᴀɴ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ! ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ғᴏʀ ɪᴛ ᴛᴏ ᴄᴏᴍᴘʟᴇᴛᴇ.",
-                parse_mode=ParseMode.HTML
-            )
-            return
-        
-        # Normalize URL if needed
-        if not url.startswith(('http://', 'https://')):
-            url = 'https://' + url
-        
-        username = message.from_user.first_name or message.from_user.username or "Unknown"
-        first_name = message.from_user.first_name or ""
-        
-        # Register/update user in database
-        await register_new_user(user_id, username, first_name)
-        
-        # Check if user already has active download
-        if user_id in active_downloads:
-            await message.reply_text(
-                "<b>❌ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ</b>\n\n"
-                "ʏᴏᴜ ᴀʟʀᴇᴀᴅʏ ʜᴀᴠᴇ ᴀɴ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ! ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ғᴏʀ ɪᴛ ᴛᴏ ᴄᴏᴍᴘʟᴇᴛᴇ.",
-                parse_mode=ParseMode.HTML
-            )
-            return
-        
-        user_id = message.from_user.id
         username = message.from_user.first_name or message.from_user.username or "Unknown"
         first_name = message.from_user.first_name or ""
         
@@ -212,13 +191,16 @@ async def handle_url_message(client: Client, message: Message):
         await download_and_send(client, message, status_msg, url, user_id)
         
     except Exception as e:
-        print(f"❌ Error in handle_url_message: {e}")
+        print(f"❌ [PROD] Error in handle_url_message: {e}")
+        import traceback
+        traceback.print_exc()
         await message.reply_text(
             f"<b>❌ ᴇʀʀᴏʀ</b>\n\n<code>{str(e)}</code>",
             parse_mode=ParseMode.HTML
         )
         if message.from_user.id in active_downloads:
             del active_downloads[message.from_user.id]
+
 
 # ==================== DOWNLOAD AND SEND ====================
 
@@ -478,7 +460,7 @@ async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_ms
         )
         return None
 
-async def upload_single_file(client, file_path, dump_id, progress_tracker, status_msg, part_num=None, total_parts=None):
+async def upload_single_file(client, user_id, file_path, dump_id, progress_tracker, status_msg, part_num=None, total_parts=None):
     """Upload a single file with real-time progress tracking"""
     try:
         file_size = os.path.getsize(file_path)
@@ -545,13 +527,17 @@ async def upload_single_file(client, file_path, dump_id, progress_tracker, statu
         
         # Start progress update task
         progress_task = asyncio.create_task(update_progress_task())
+
         
         # Create caption with metadata - NO INLINE KEYBOARD for dump channels
         metadata = progress_tracker.metadata
+        leecher = f"@{message.from_user.username}" if message.from_user.username else (message.from_user.first_name or "Unknown")
         if part_num and total_parts:
             caption = f"<b>{file_name}</b>\n<b>📦 Part {part_num}/{total_parts} | {format_bytes(file_size)}</b>\n\n"
         else:
-            caption = f"<b>{file_name}</b>\n<b> {format_bytes(file_size)}</b>\n\n"
+            caption = f"<b>{file_name}</b>| <b> {format_bytes(file_size)}</b>\n"
+
+        
         
         # Generate thumbnail for videos
         thumbnail_path = None

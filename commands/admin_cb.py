@@ -365,7 +365,7 @@ async def refresh_files_settings(client: Client, callback_query: CallbackQuery, 
 
 # ==================== CONVERSATION MESSAGE HANDLER ====================
 
-@Client.on_message(filters.private & filters.text)
+@Client.on_message(filters.private & filters.text, group=0)
 async def handle_admin_conversation_logic(client: Client, message: Message):
     """Handle admin conversation logic - can be called from anywhere"""
     try:
