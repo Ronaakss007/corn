@@ -183,8 +183,19 @@ async def generate_thumbnail(video_path, thumb_path, time_offset=10):
 # ==================== FILE UTILITIES ====================
 
 async def get_video_duration_from_file(file_path):
-    meta = await get_video_metadata(f"file:{file_path}")
-    return meta.get("duration", 0)
+    """Get video duration from file with better error handling"""
+    try:
+        if not os.path.exists(file_path):
+            print(f"File does not exist: {file_path}")
+            return 0
+        
+        meta = await get_video_metadata(f"file:{file_path}")
+        duration = meta.get("duration", 0) if meta else 0
+        print(f"Video duration: {duration} seconds")
+        return duration
+    except Exception as e:
+        print(f"Error getting video duration: {e}")
+        return 0
 
 async def split_video(file_path, max_size=1.95 * 1024 * 1024 * 1024):
     """
@@ -192,17 +203,50 @@ async def split_video(file_path, max_size=1.95 * 1024 * 1024 * 1024):
     Uses get_video_metadata to get duration.
     """
     try:
+        print(f"Starting video split for: {file_path}")
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            print(f"❌ File does not exist: {file_path}")
+            return [file_path]
+        
         file_size = os.path.getsize(file_path)
+        print(f"File size: {file_size} bytes ({file_size / (1024*1024*1024):.2f} GB)")
+        
         if file_size <= max_size:
+            print("File is under size limit, no splitting needed")
             return [file_path]
 
+        # Get video duration
         duration = await get_video_duration_from_file(file_path)
         if duration <= 0:
             print("⚠️ Unable to get video duration or duration is zero.")
+            # Try alternative method to get duration
+            try:
+                import subprocess
+                cmd = [
+                    "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                    "-of", "csv=p=0", str(file_path)
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                if result.returncode == 0 and result.stdout.strip():
+                    duration = float(result.stdout.strip())
+                    print(f"Got duration from ffprobe: {duration}")
+                else:
+                    print("Failed to get duration from ffprobe")
+                    return [file_path]
+            except Exception as probe_error:
+                print(f"ffprobe error: {probe_error}")
+                return [file_path]
+
+        if duration <= 0:
+            print("Still no valid duration, cannot split")
             return [file_path]
 
         num_parts = math.ceil(file_size / max_size)
         part_duration = duration / num_parts  # float division
+        
+        print(f"Splitting into {num_parts} parts, each ~{part_duration:.2f} seconds")
 
         chunks = []
         chunk_num = 1
@@ -212,16 +256,27 @@ async def split_video(file_path, max_size=1.95 * 1024 * 1024 * 1024):
         extension = p.suffix
         folder = p.parent
 
+        # Check if ffmpeg is available
+        try:
+            subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True, timeout=10)
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+            print(f"❌ ffmpeg not available: {e}")
+            return [file_path]
+
         for i in range(num_parts):
             start_time = part_duration * i
             if i == num_parts - 1:
                 current_duration = duration - start_time
                 if current_duration <= 0:
+                    print(f"Skipping part {chunk_num} - invalid duration")
                     break
             else:
                 current_duration = part_duration
 
             output_file = folder / f"{base_name}.part{chunk_num:03d}{extension}"
+            
+            print(f"Creating part {chunk_num}: {output_file}")
+            print(f"Start time: {start_time:.2f}s, Duration: {current_duration:.2f}s")
 
             cmd = [
                 "ffmpeg", "-hide_banner", "-loglevel", "error",
@@ -233,19 +288,136 @@ async def split_video(file_path, max_size=1.95 * 1024 * 1024 * 1024):
                 "-y", str(output_file)
             ]
 
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                print(f"Running command: {' '.join(cmd)}")
+                result = subprocess.run(
+                    cmd, 
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.PIPE,
+                    timeout=300  # 5 minute timeout per part
+                )
 
-            if result.returncode == 0 and output_file.exists():
-                chunks.append(str(output_file))
-                chunk_num += 1
-            else:
-                print(f"❌ Failed to split part {chunk_num}: {result.stderr.decode().strip()}")
+                if result.returncode == 0 and output_file.exists():
+                    chunk_size = os.path.getsize(output_file)
+                    print(f"✅ Successfully created part {chunk_num}: {chunk_size} bytes")
+                    chunks.append(str(output_file))
+                    chunk_num += 1
+                else:
+                    error_msg = result.stderr.decode().strip() if result.stderr else "Unknown error"
+                    print(f"❌ Failed to split part {chunk_num}: {error_msg}")
+                    print(f"Return code: {result.returncode}")
+                    
+                    # If this is the first part and it fails, return original file
+                    if chunk_num == 1:
+                        print("First part failed, returning original file")
+                        return [file_path]
+                    
+            except subprocess.TimeoutExpired:
+                print(f"❌ Timeout while creating part {chunk_num}")
+                break
+            except Exception as cmd_error:
+                print(f"❌ Command execution error for part {chunk_num}: {cmd_error}")
+                break
 
-        return chunks if chunks else [file_path]
+        if chunks:
+            print(f"✅ Successfully split video into {len(chunks)} parts")
+            return chunks
+        else:
+            print("❌ No chunks created, returning original file")
+            return [file_path]
 
     except Exception as e:
         print(f"❌ Error splitting video: {e}")
+        import traceback
+        traceback.print_exc()
         return [file_path]
+
+# Alternative splitting function for non-video files
+def split_file(file_path, max_size=1.95 * 1024 * 1024 * 1024):
+    """
+    Split any file into parts by size
+    """
+    try:
+        print(f"Starting file split for: {file_path}")
+        
+        if not os.path.exists(file_path):
+            print(f"❌ File does not exist: {file_path}")
+            return [file_path]
+        
+        file_size = os.path.getsize(file_path)
+        print(f"File size: {file_size} bytes")
+        
+        if file_size <= max_size:
+            print("File is under size limit, no splitting needed")
+            return [file_path]
+
+        chunks = []
+        chunk_num = 1
+        
+        p = Path(file_path)
+        base_name = p.stem
+        extension = p.suffix
+        folder = p.parent
+
+        with open(file_path, 'rb') as input_file:
+            while True:
+                chunk_data = input_file.read(int(max_size))
+                if not chunk_data:
+                    break
+                
+                output_file = folder / f"{base_name}.part{chunk_num:03d}{extension}"
+                
+                with open(output_file, 'wb') as output_chunk:
+                    output_chunk.write(chunk_data)
+                
+                if os.path.exists(output_file):
+                    chunk_size = os.path.getsize(output_file)
+                    print(f"✅ Created chunk {chunk_num}: {chunk_size} bytes")
+                    chunks.append(str(output_file))
+                    chunk_num += 1
+                else:
+                    print(f"❌ Failed to create chunk {chunk_num}")
+                    break
+
+        if chunks:
+            print(f"✅ Successfully split file into {len(chunks)} parts")
+            return chunks
+        else:
+            print("❌ No chunks created, returning original file")
+            return [file_path]
+
+    except Exception as e:
+        print(f"❌ Error splitting file: {e}")
+        import traceback
+        traceback.print_exc()
+        return [file_path]
+
+# Helper function to check if a file is a video
+def is_video_file(file_path):
+    """Check if file is a video based on extension and mime type"""
+    try:
+        import mimetypes
+        
+        # Check by extension first
+        video_extensions = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv', '.m4v', '.3gp']
+        file_ext = Path(file_path).suffix.lower()
+        
+        if file_ext in video_extensions:
+            return True
+        
+        # Check by mime type
+        mime_type, _ = mimetypes.guess_type(file_path)
+        if mime_type and mime_type.startswith('video/'):
+            return True
+            
+        return False
+        
+    except Exception as e:
+        print(f"Error checking if file is video: {e}")
+        # Fallback to extension check
+        video_extensions = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv', '.m4v', '.3gp']
+        return Path(file_path).suffix.lower() in video_extensions
+
 
 def cleanup_files(directory):
     """Clean up files in directory"""
