@@ -809,7 +809,7 @@ def download_video(url, ydl_opts):
             })
         elif any(adult_site in domain for adult_site in ['pornhub', 'xvideos', 'xnxx', 'xhamster']):
             speed_opts.update({
-                'format': 'best[height<=720]/best',
+                'format': 'best[height<=1080]/best[height<=720]/best',  # Fixed: added height values
                 'concurrent_fragment_downloads': 6,
                 'http_headers': {
                     **speed_opts['http_headers'],
@@ -818,7 +818,7 @@ def download_video(url, ydl_opts):
             })
         else:
             speed_opts.update({
-                'format': 'best/worst',
+                'format': 'best[height<=720]/best[height<=480]/best',  # Also improved this
                 'concurrent_fragment_downloads': 3,
             })
         
@@ -831,7 +831,7 @@ def download_video(url, ydl_opts):
             # Fallback with conservative settings
             conservative_opts = {
                 **ydl_opts,
-                'format': 'worst/best',
+                'format': 'best/worst',  # Changed to prioritize best quality in fallback
                 'concurrent_fragment_downloads': 1,
                 'http_headers': {
                     'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
@@ -839,7 +839,6 @@ def download_video(url, ydl_opts):
                 'socket_timeout': 60,
                 'retries': 3,
             }
-            
             try:
                 with yt_dlp.YoutubeDL(conservative_opts) as ydl_conservative:
                     ydl_conservative.download([url])
