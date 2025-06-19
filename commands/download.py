@@ -17,14 +17,13 @@ from pyrogram import Client
 from pyrogram.errors import FloodWait
 import math
 import sys
-# Add this import
 from commands.basic import check_subscription
 from database import *
 from helper_func import *
 import mimetypes
 from pathlib import Path
 
-# Import admin conversations - ADD THIS LINE
+# Import admin conversations
 try:
     from commands.admin_cb import admin_conversations
 except ImportError:
@@ -32,14 +31,17 @@ except ImportError:
 
 user_client = None
 
-# Get dump channels from config (fixed)
+# Get dump channels from config
 DUMP_CHAT_IDS = Config.DUMP_CHAT_IDS
 
-# Global variables to track downloads
-active_downloads = {}
+# Global variables to track downloads - Support multiple downloads per user
+active_downloads = {}  # user_id: [list of ProgressTracker objects]
+MAX_CONCURRENT_DOWNLOADS = 3  # Maximum concurrent downloads per user
 
 class ProgressTracker:
-    def __init__(self):
+    def __init__(self, url, download_id):
+        self.url = url
+        self.download_id = download_id
         self.start_time = time.time()
         self.downloaded = 0
         self.total_size = 0
@@ -50,6 +52,7 @@ class ProgressTracker:
         self.metadata = {}
         self.upload_progress = 0
         self.upload_total = 0
+        self.status_msg = None
 
 # Create a custom filter function
 def not_in_admin_conversation(_, __, message):
@@ -57,12 +60,12 @@ def not_in_admin_conversation(_, __, message):
     try:
         user_id = message.from_user.id
         is_in_conversation = user_id in admin_conversations
-        print(f"🔍 Filter check: User {user_id} in admin conversation: {is_in_conversation}")
         return not is_in_conversation
     except Exception as e:
-        print(f"❌ Error in admin conversation filter: {e}")
-        return True  # Allow message if filter fails
+        return True
+
 from admin_state import admin_conversations
+
 def not_admin_user(_, __, message):
     """Check if user is not an admin"""
     from helper_func import check_admin
@@ -75,28 +78,20 @@ def not_admin_user(_, __, message):
     "refresh", "showchannels", "removechannel", "refreshchannels"
 ]), group=10)
 async def handle_url_message(client: Client, message: Message):
-    """Handle URL messages for download - Admin-friendly version"""
+    """Handle URL messages for download - Production version with concurrent support"""
     try:
         from config import Config
         from admin_state import admin_conversations, has_admin_conversation
         
         user_id = message.from_user.id
         
-        # Check if message exists
         if not message.text:
-            print(f"❌ [PROD] No message text for user {user_id}")
             return
             
         text = message.text.strip()
         
-        # CRITICAL: Check admin conversation state FIRST before any processing
-        if has_admin_conversation(user_id):
-            print(f"🛑 [PROD] User {user_id} is in admin conversation state - skipping URL handler completely")
-            return
-        
-        # Alternative check using direct dictionary access
-        if user_id in admin_conversations:
-            print(f"🛑 [PROD] User {user_id} found in admin_conversations - skipping URL handler")
+        # Check admin conversation state
+        if has_admin_conversation(user_id) or user_id in admin_conversations:
             return
         
         # Check URL indicators
@@ -104,35 +99,27 @@ async def handle_url_message(client: Client, message: Message):
         
         is_url = any(indicator in text.lower() for indicator in url_indicators)
         
-        # If it's not a URL, let other handlers process it
         if not is_url:
-            print(f"📝 [PROD] Text from user {user_id} is not a URL - letting other handlers process")
             return
         
-        # Additional check: if it's a telegram link, it might be admin setting button URL
+        # Skip t.me links for admins (might be setting button URLs)
         if 't.me/' in text.lower() and user_id in Config.ADMINS:
-            print(f"⚠️ [PROD] Admin {user_id} sent t.me link - might be setting button URL, double-checking admin state")
-            # Give admin conversation handler priority for t.me links
-            await asyncio.sleep(0.2)  # Increased delay for production
-            if has_admin_conversation(user_id):
-                print(f"🛑 [PROD] Confirmed: Admin {user_id} is in conversation - skipping download")
-                return
-            # Double check again
-            if user_id in admin_conversations:
-                print(f"🛑 [PROD] Double-check: Admin {user_id} is in conversation - skipping download")
+            await asyncio.sleep(0.2)
+            if has_admin_conversation(user_id) or user_id in admin_conversations:
                 return
         
-        # If user is admin and sent a URL, process it
-        if user_id in Config.ADMINS:
-            print(f"🔗 [PROD] Admin {user_id} sent URL: {text[:50]}... - Processing download")
-        else:
-            # Check subscription for non-admins
+        # Skip t.me links as they're not downloadable
+        if 't.me/' in text.lower():
+            return
+        
+        # Check subscription for non-admins
+        if user_id not in Config.ADMINS:
             if not await check_subscription(client, message):
                 return
         
         url = text.strip()
         
-        # Enhanced URL validation - but skip validation for t.me links that might be button URLs
+        # Enhanced URL validation
         if not (url.startswith(('http://', 'https://')) or any(site in url.lower() for site in ['youtube.com', 'youtu.be', 'instagram.com', 'tiktok.com', 'facebook.com', 'twitter.com', 'x.com'])):
             await message.reply_text(
                 "<b>❌ ɪɴᴠᴀʟɪᴅ ᴜʀʟ</b>\n\n"
@@ -140,14 +127,6 @@ async def handle_url_message(client: Client, message: Message):
                 parse_mode=ParseMode.HTML
             )
             return
-        
-        # Skip processing t.me links as they're not downloadable
-        if 't.me/' in url.lower():
-            print(f"⚠️ [PROD] Skipping t.me link as it's not downloadable: {url}")
-            return
-        
-        # Continue with download process...
-        print(f"🚀 [PROD] Starting download process for user {user_id}")
         
         # Normalize URL if needed
         if not url.startswith(('http://', 'https://')):
@@ -159,55 +138,61 @@ async def handle_url_message(client: Client, message: Message):
         # Register/update user in database
         await register_new_user(user_id, username, first_name)
         
-        # Check if user already has active download
-        # if user_id in active_downloads:
-        #     await message.reply_text(
-        #         "<b>❌ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ</b>\n\n"
-        #         "ʏᴏᴜ ᴀʟʀᴇᴀᴅʏ ʜᴀᴠᴇ ᴀɴ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅ! ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ғᴏʀ ɪᴛ ᴛᴏ ᴄᴏᴍᴘʟᴇᴛᴇ.",
-        #         parse_mode=ParseMode.HTML
-        #     )
-        #     return
+        # Check concurrent download limit
+        if user_id in active_downloads:
+            if len(active_downloads[user_id]) >= MAX_CONCURRENT_DOWNLOADS:
+                await message.reply_text(
+                    f"<b>⚠️ ᴅᴏᴡɴʟᴏᴀᴅ ʟɪᴍɪᴛ ʀᴇᴀᴄʜᴇᴅ</b>\n\n"
+                    f"ʏᴏᴜ ᴄᴀɴ ʜᴀᴠᴇ ᴍᴀxɪᴍᴜᴍ <b>{MAX_CONCURRENT_DOWNLOADS}</b> ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs.\n"
+                    f"ᴄᴜʀʀᴇɴᴛ ᴀᴄᴛɪᴠᴇ: <b>{len(active_downloads[user_id])}</b>\n\n"
+                    f"ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ғᴏʀ ᴏɴᴇ ᴛᴏ ᴄᴏᴍᴘʟᴇᴛᴇ.",
+                    parse_mode=ParseMode.HTML
+                )
+                return
+        else:
+            active_downloads[user_id] = []
         
-        # Start download process
-        active_downloads[user_id] = ProgressTracker()
+        # Generate unique download ID
+        download_id = f"{user_id}_{int(time.time())}_{len(active_downloads[user_id])}"
         
-        status_msg = await message.reply_text(
-            "<b>!</b>",
-            parse_mode=ParseMode.HTML
-        )
-        await status_msg.edit_text("<b>!!</b>")
-        await asyncio.sleep(0.3)
-        await status_msg.edit_text("<b>!?!</b>")
-        await asyncio.sleep(0.3)
+        # Create progress tracker
+        progress_tracker = ProgressTracker(url, download_id)
+        active_downloads[user_id].append(progress_tracker)
         
-        # Extract metadata and start download
+        # Create status message
+        status_msg = await message.reply_text("<b>⏳ ɪɴɪᴛɪᴀʟɪᴢɪɴɢ...</b>", parse_mode=ParseMode.HTML)
+        progress_tracker.status_msg = status_msg
+        
+        # Extract metadata
         metadata = await get_video_metadata(url)
         if metadata:
-            active_downloads[user_id].metadata = metadata
+            progress_tracker.metadata = metadata
         
-        await download_and_send(client, message, status_msg, url, user_id)
+        # Start download in background
+        asyncio.create_task(download_and_send_concurrent(client, message, progress_tracker, user_id))
         
     except Exception as e:
-        print(f"❌ [PROD] Error in handle_url_message: {e}")
-        import traceback
-        traceback.print_exc()
         await message.reply_text(
             f"<b>❌ ᴇʀʀᴏʀ</b>\n\n<code>{str(e)}</code>",
             parse_mode=ParseMode.HTML
         )
-        if message.from_user.id in active_downloads:
-            del active_downloads[message.from_user.id]
+        # Clean up on error
+        if user_id in active_downloads:
+            active_downloads[user_id] = [t for t in active_downloads[user_id] if t.download_id != download_id]
+            if not active_downloads[user_id]:
+                del active_downloads[user_id]
 
+# ==================== CONCURRENT DOWNLOAD AND SEND ====================
 
-# ==================== DOWNLOAD AND SEND ====================
-
-async def download_and_send(client, message, status_msg, url, user_id):
-    """Download video and send to user with progress tracking"""
+async def download_and_send_concurrent(client, message, progress_tracker, user_id):
+    """Download video and send to user with concurrent support"""
+    download_id = progress_tracker.download_id
+    url = progress_tracker.url
+    status_msg = progress_tracker.status_msg
+    
     try:
-        download_dir = f"./downloads/{user_id}/"
+        download_dir = f"./downloads/{download_id}/"
         os.makedirs(download_dir, exist_ok=True)
-        
-        progress_tracker = active_downloads[user_id]
         
         def progress_hook(d):
             """Progress hook for yt-dlp"""
@@ -223,7 +208,7 @@ async def download_and_send(client, message, status_msg, url, user_id):
                     progress_tracker.status = "ᴄᴏᴍᴘʟᴇᴛᴇᴅ"
                     progress_tracker.filename = d.get('filename', 'Unknown')
             except Exception as e:
-                print(f"Progress hook error: {e}")
+                pass
         
         # Configure yt-dlp options
         ydl_opts = get_download_options(url)
@@ -233,7 +218,7 @@ async def download_and_send(client, message, status_msg, url, user_id):
         })
         
         # Start progress update task
-        progress_task = asyncio.create_task(update_progress(status_msg, user_id, url))
+        progress_task = asyncio.create_task(update_progress_concurrent(progress_tracker))
         
         # Download in a separate thread
         loop = asyncio.get_event_loop()
@@ -255,8 +240,6 @@ async def download_and_send(client, message, status_msg, url, user_id):
             "<b>📋 ᴘʀᴇᴘᴀʀɪɴɢ ғɪʟᴇs ғᴏʀ ᴜᴘʟᴏᴀᴅ...</b>",
             parse_mode=ParseMode.HTML
         )
-        
-        await asyncio.sleep(1)
         
         # Find downloaded files
         downloaded_files = []
@@ -281,54 +264,20 @@ async def download_and_send(client, message, status_msg, url, user_id):
                 file_size = os.path.getsize(file_path)
                 file_name = os.path.basename(file_path)
                 
-                # Check file size
-                if file_size > 2 * 1024 * 1024 * 1024:
+                # First upload to user with spoiler (for videos)
+                user_message = await upload_to_user_first(client, message, file_path, progress_tracker)
                 
-                    print(f"ℹ️ Large file detected: {file_name} ({format_bytes(file_size)}). Will be split before upload.")
-                
-                # Upload to first dump channel
-                dump_message = await upload_to_dump(client, file_path, DUMP_CHAT_IDS[0], progress_tracker, status_msg)
-                
-                if dump_message:
-                    await status_msg.edit_text(
-                        f"<b>✅ ᴜᴘʟᴏᴀᴅ sᴜᴄᴄᴇssғᴜʟ!</b>\n\n"
-                        f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                        f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n",
-                        parse_mode=ParseMode.HTML
-                    )
+                if user_message:
+                    # Then copy to all dump channels
+                    await copy_to_dumps(client, user_message, file_name, file_size)
                     
-                    # Copy to other dump channels
-                    for dump_id in DUMP_CHAT_IDS[1:]:
-                        try:
-                            await client.copy_message(
-                                chat_id=dump_id,
-                                from_chat_id=DUMP_CHAT_IDS[0],
-                                message_id=dump_message.id
-                            )
-                        except Exception as e:
-                            print(f"❌ Error copying to dump {dump_id}: {e}")
-                    
-                    await status_msg.edit_text(
-                        f"<b>📤 sᴇɴᴅɪɴɢ ᴛᴏ ʏᴏᴜ...</b>\n\n"
-                        f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>",
-                        parse_mode=ParseMode.HTML
-                    )
-                    
-                    # Send to user with enhanced settings
-                    is_premium = await is_premium_user(message.from_user.id)
-                    user_message = await send_file_to_user_enhanced(
-                        client, message, dump_message, file_name, file_size, is_premium
-                    )
-                    
-                    if user_message:
-                        uploaded_successfully = True
-                        total_file_size += file_size
-                        uploaded_files.append({
-                            'name': file_name,
-                            'size': file_size,
-                            'path': file_path
-                        })
-                    
+                    uploaded_successfully = True
+                    total_file_size += file_size
+                    uploaded_files.append({
+                        'name': file_name,
+                        'size': file_size,
+                        'path': file_path
+                    })
                 else:
                     await message.reply_text(
                         f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ ᴜᴘʟᴏᴀᴅ:</b> {os.path.basename(file_path)}",
@@ -336,7 +285,6 @@ async def download_and_send(client, message, status_msg, url, user_id):
                     )
                 
             except Exception as e:
-                print(f"❌ Error processing file {file_path}: {e}")
                 await message.reply_text(
                     f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇɴᴅ:</b> {os.path.basename(file_path)}",
                     parse_mode=ParseMode.HTML
@@ -357,14 +305,9 @@ async def download_and_send(client, message, status_msg, url, user_id):
                     file_type = 'document'
                 
                 success = await update_download_stats(user_id, username, url, total_file_size, file_type)
-                
-                if success:
-                    print(f"✅ Stats updated successfully for user {user_id}")
-                else:
-                    print(f"❌ Failed to update stats for user {user_id}")
 
             except Exception as e:
-                print(f"❌ Error updating download stats: {e}")
+                pass
         
         # Delete the status message after everything is done
         if uploaded_successfully:
@@ -383,75 +326,71 @@ async def download_and_send(client, message, status_msg, url, user_id):
             )
         
     except Exception as e:
-        print(f"❌ Error in download_and_send: {e}")
         await status_msg.edit_text(
             f"<b>❌ ᴇʀʀᴏʀ:</b> {str(e)}",
             parse_mode=ParseMode.HTML
         )
     
     finally:
-        cleanup_files(f"./downloads/{user_id}/")
+        cleanup_files(download_dir)
+        # Remove from active downloads
         if user_id in active_downloads:
-            del active_downloads[user_id]
+            active_downloads[user_id] = [t for t in active_downloads[user_id] if t.download_id != download_id]
+            if not active_downloads[user_id]:
+                del active_downloads[user_id]
 
-# ==================== UPLOAD FUNCTIONS ====================
+# ==================== UPLOAD TO USER FIRST ====================
 
-def is_video_file(file_path):
-    mime_type, _ = mimetypes.guess_type(file_path)
-    return mime_type and mime_type.startswith("video/")
-
-async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_msg):
+async def upload_to_user_first(client, message, file_path, progress_tracker):
+    """Upload file to user first with spoiler support for videos"""
     try:
         file_size = os.path.getsize(file_path)
         file_name = os.path.basename(file_path)
-
+        status_msg = progress_tracker.status_msg
+        
+        # Check if file needs splitting
         if file_size > 1.98 * 1024 * 1024 * 1024:
-            print(f"📦 File too large ({format_bytes(file_size)}), splitting...")
-
             await status_msg.edit_text(
                 f"<b>📦 sᴘʟɪᴛᴛɪɴɢ ʟᴀʀɢᴇ ғɪʟᴇ</b>\n\n"
                 f"<b>📁 ғɪʟᴇ:</b> {file_name}\n"
-                f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
-                f"<b>⏳ sᴛᴀᴛᴜs:</b> sᴘʟɪᴛᴛɪɴɢ...",
+                f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}",
                 parse_mode=ParseMode.HTML
             )
-
+            
             if is_video_file(file_path):
                 from helper_func import split_video
                 file_chunks = await split_video(file_path)
             else:
                 from helper_func import split_file
                 file_chunks = split_file(file_path)
-
+            
             uploaded_messages = []
-
+            
             for i, chunk_path in enumerate(file_chunks, 1):
                 chunk_size = os.path.getsize(chunk_path)
                 chunk_name = os.path.basename(chunk_path)
-
+                
                 await status_msg.edit_text(
-                    f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {i}/{len(file_chunks)}</b>\n\n"
+                    f"<b>📤 sᴇɴᴅɪɴɢ ᴘᴀʀᴛ {i}/{len(file_chunks)}</b>\n\n"
                     f"<b>📁 ғɪʟᴇ:</b> {chunk_name}\n"
-                    f"<b>💾 sɪᴢᴇ:</b> {format_bytes(chunk_size)}\n"
-                    f"<b>⏳ sᴛᴀᴛᴜs:</b> ᴜᴘʟᴏᴀᴅɪɴɢ...",
+                    f"<b>💾 sɪᴢᴇ:</b> {format_bytes(chunk_size)}",
                     parse_mode=ParseMode.HTML
                 )
-
-                chunk_msg = await upload_single_file(client, chunk_path, dump_id, progress_tracker, status_msg, i, len(file_chunks))
+                
+                chunk_msg = await upload_single_file_to_user(client, message, chunk_path, progress_tracker, i, len(file_chunks))
                 if chunk_msg:
                     uploaded_messages.append(chunk_msg)
-
+                
                 try:
                     os.remove(chunk_path)
-                except Exception as e:
-                    print(f"⚠️ Could not delete chunk {chunk_path}: {e}")
-
+                except Exception:
+                    pass
+            
             return uploaded_messages[0] if uploaded_messages else None
         else:
-            return await upload_single_file(client, file_path, dump_id, progress_tracker, status_msg)
-
+            return await upload_single_file_to_user(client, message, file_path, progress_tracker)
+            
     except Exception as e:
-        print(f"❌ Error uploading to dump: {e}")
         await status_msg.edit_text(
             f"<b>❌ ᴜᴘʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
             f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
@@ -460,81 +399,46 @@ async def upload_to_dump(client, file_path, dump_id, progress_tracker, status_ms
         )
         return None
 
-
-async def upload_single_file(client, file_path, dump_id, progress_tracker, status_msg, part_num=None, total_parts=None):
-    """Upload a single file with real-time progress tracking"""
+async def upload_single_file_to_user(client, message, file_path, progress_tracker, part_num=None, total_parts=None):
+    """Upload single file to user with enhanced features"""
     try:
         file_size = os.path.getsize(file_path)
         file_name = os.path.basename(file_path)
+        status_msg = progress_tracker.status_msg
         
-        # Initialize progress tracking
-        last_update = 0
+        # Get user settings
+        settings = await get_file_settings()
+        is_premium = await is_premium_user(message.from_user.id)
+        
+        protect_content = settings.get('protect_content', False)
+        show_caption = settings.get('show_caption', True)
+        auto_delete = settings.get('auto_delete', False)
+        auto_delete_time = settings.get('auto_delete_time', 300)
+        inline_buttons = settings.get('inline_buttons', True)
+        spoiler_enabled = settings.get('spoiler_enabled', False)
+        
+        # Create caption
+        if part_num and total_parts:
+            caption = f"<b>{file_name}</b>\n<b>📦 Part {part_num}/{total_parts} | {format_bytes(file_size)}</b>" if show_caption else None
+        else:
+            caption = f"<b>{file_name}</b>\n<b>{format_bytes(file_size)}</b>" if show_caption else None
+        
+        keyboard = await create_user_keyboard(is_premium) if inline_buttons else None
+        
+        # Progress tracking
         upload_start_time = time.time()
-        
         progress_data = {
             'current': 0,
             'total': file_size,
-            'last_update': 0,
-            'start_time': upload_start_time,
-            'last_uploaded': 0
+            'start_time': upload_start_time
         }
-        
-        # Progress update task
-        async def update_progress_task():
-            while progress_data['current'] < progress_data['total']:
-                try:
-                    current = progress_data['current']
-                    total = progress_data['total']
-                    
-                    if current == 0:
-                        await asyncio.sleep(1)
-                        continue
-                    
-                    now = time.time()
-                    total_time = now - progress_data['start_time']
-                    avg_speed = current / total_time if total_time > 0 else 0
-                    
-                    remaining_bytes = total - current
-                    eta = remaining_bytes / avg_speed if avg_speed > 0 else 0
-                    
-                    percentage = (current / total) * 100 if total > 0 else 0
-                    progress_bar = create_progress_bar(percentage)
-                    
-                    if part_num and total_parts:
-                        status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ᴘᴀʀᴛ {part_num}/{total_parts}</b>\n\n"
-                    else:
-                        status_text = f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ...</b>\n\n"
-                    
-                    status_text += (
-                        f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                        f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n\n"
-                        f"<b>📊 ᴘʀᴏɢʀᴇss:</b>\n"
-                        f"<code>{progress_bar}</code> <b>{percentage:.1f}%</b>\n\n"
-                        f"<b>📤 ᴜᴘʟᴏᴀᴅᴇᴅ:</b> {format_bytes(current)} / {format_bytes(total)}\n"
-                        f"<b>📈 ᴀᴠᴇʀᴀɢᴇ sᴘᴇᴇᴅ:</b> {format_bytes(avg_speed)}/s\n"
-                        f"<b>⏱️ ᴇᴛᴀ:</b> {format_time(eta)}"
-                    )
-                    
-                    await safe_edit_message(status_msg, status_text, ParseMode.HTML)
-                    await asyncio.sleep(2)
-                    
-                except Exception as e:
-                    print(f"Progress update error: {e}")
-                    await asyncio.sleep(2)
         
         def upload_progress(current, total):
             progress_data['current'] = current
             progress_data['total'] = total
         
         # Start progress update task
-        progress_task = asyncio.create_task(update_progress_task())
-        
-        # Create caption with metadata - NO INLINE KEYBOARD for dump channels
-        metadata = progress_tracker.metadata
-        if part_num and total_parts:
-            caption = f"<b>{file_name}</b>\n<b>📦 Part {part_num}/{total_parts} | {format_bytes(file_size)}</b>\n\n"
-        else:
-            caption = f"<b>{file_name}</b>\n<b> {format_bytes(file_size)}</b>\n\n"
+        progress_task = asyncio.create_task(update_upload_progress(status_msg, progress_data, file_name, part_num, total_parts))
         
         # Generate thumbnail for videos
         thumbnail_path = None
@@ -549,14 +453,14 @@ async def upload_single_file(client, file_path, dump_id, progress_tracker, statu
         if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
             width, height = await get_video_dimensions(file_path)
         
-        # Upload with retry mechanism
-        dump_message = None
+        user_message = None
+        metadata = progress_tracker.metadata
         
         try:
             if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
-                # Send as video to DUMP CHANNEL - NO KEYBOARD
-                dump_message = await client.send_video(
-                    chat_id=dump_id,
+                # Send as video with spoiler support
+                user_message = await client.send_video(
+                    chat_id=message.chat.id,
                     video=file_path,
                     caption=caption,
                     supports_streaming=True,
@@ -565,12 +469,15 @@ async def upload_single_file(client, file_path, dump_id, progress_tracker, statu
                     width=width,
                     height=height,
                     progress=upload_progress,
-                    parse_mode=ParseMode.HTML
+                    parse_mode=ParseMode.HTML if caption else None,
+                    reply_markup=keyboard,
+                    protect_content=protect_content,
+                    has_spoiler=spoiler_enabled  # Spoiler for videos
                 )
             elif file_path.lower().endswith(('.mp3', '.m4a', '.wav', '.flac', '.ogg')):
-                # Send as audio to DUMP CHANNEL - NO KEYBOARD
-                dump_message = await client.send_audio(
-                    chat_id=dump_id,
+                # Send as audio
+                user_message = await client.send_audio(
+                    chat_id=message.chat.id,
                     audio=file_path,
                     caption=caption,
                     duration=int(metadata.get('duration', 0)) if metadata else 0,
@@ -578,21 +485,24 @@ async def upload_single_file(client, file_path, dump_id, progress_tracker, statu
                     title=metadata.get('title', file_name) if metadata else file_name,
                     thumb=thumbnail_path,
                     progress=upload_progress,
-                    parse_mode=ParseMode.HTML
+                    parse_mode=ParseMode.HTML if caption else None,
+                    reply_markup=keyboard,
+                    protect_content=protect_content
                 )
             else:
-                # Send as document to DUMP CHANNEL - NO KEYBOARD
-                dump_message = await client.send_document(
-                    chat_id=dump_id,
+                # Send as document
+                user_message = await client.send_document(
+                    chat_id=message.chat.id,
                     document=file_path,
                     caption=caption,
                     thumb=thumbnail_path,
                     progress=upload_progress,
-                    parse_mode=ParseMode.HTML
+                    parse_mode=ParseMode.HTML if caption else None,
+                    reply_markup=keyboard,
+                    protect_content=protect_content
                 )
         
         except Exception as e:
-            print(f"❌ Upload failed: {e}")
             raise e
         
         finally:
@@ -606,140 +516,7 @@ async def upload_single_file(client, file_path, dump_id, progress_tracker, statu
                 except:
                     pass
         
-        # Final upload success message
-        if dump_message:
-            upload_time = time.time() - upload_start_time
-            avg_speed = file_size / upload_time if upload_time > 0 else 0
-            
-            await status_msg.edit_text(
-                f"<b>✅ ᴜᴘʟᴏᴀᴅ ᴄᴏᴍᴘʟᴇᴛᴇᴅ!</b>\n\n"
-                f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
-                f"<b>⏱️ ᴛɪᴍᴇ ᴛᴀᴋᴇɴ:</b> {format_time(upload_time)}\n"
-                f"<b>📈 ᴀᴠᴇʀᴀɢᴇ sᴘᴇᴇᴅ:</b> {format_bytes(avg_speed)}/s",
-                parse_mode=ParseMode.HTML
-            )
-        
-        return dump_message
-        
-    except Exception as e:
-        print(f"❌ Error uploading single file: {e}")
-        await status_msg.edit_text(
-            f"<b>❌ ᴜᴘʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
-            f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-            f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
-            parse_mode=ParseMode.HTML
-        )
-        return None
-
-# ==================== ENHANCED FILE SENDING ====================
-
-async def send_file_to_user_enhanced(client, message, dump_message, file_name, file_size, is_premium):
-    """Enhanced file sending with all protection features including spoiler support"""
-    try:
-        settings = await get_file_settings()
-
-        protect_content = settings.get('protect_content', False)
-        show_caption = settings.get('show_caption', True)
-        auto_delete = settings.get('auto_delete', False)
-        auto_delete_time = settings.get('auto_delete_time', 300)
-        inline_buttons = settings.get('inline_buttons', True)
-        spoiler_enabled = settings.get('spoiler_enabled', False)
-
-        caption = f"<b>{file_name}</b>\n<b>{format_bytes(file_size)}</b>" if show_caption else None
-        keyboard = await create_user_keyboard(is_premium) if inline_buttons else None
-
-        user_message = None
-
-        try:
-            if dump_message.video:
-                user_message = await client.send_video(
-                    chat_id=message.chat.id,
-                    video=dump_message.video.file_id,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML if caption else None,
-                    reply_markup=keyboard,
-                    protect_content=protect_content,
-                    has_spoiler=spoiler_enabled,
-                    duration=dump_message.video.duration,
-                    width=dump_message.video.width,
-                    height=dump_message.video.height,
-                    thumb=dump_message.video.thumbs[0].file_id if dump_message.video.thumbs else None,
-                    supports_streaming=True
-                )
-            elif dump_message.document:
-                user_message = await client.send_document(
-                    chat_id=message.chat.id,
-                    document=dump_message.document.file_id,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML if caption else None,
-                    reply_markup=keyboard,
-                    protect_content=protect_content,
-                    # has_spoiler is not supported here
-                    thumb=dump_message.document.thumbs[0].file_id if dump_message.document.thumbs else None
-                )
-            elif dump_message.audio:
-                user_message = await client.send_audio(
-                    chat_id=message.chat.id,
-                    audio=dump_message.audio.file_id,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML if caption else None,
-                    reply_markup=keyboard,
-                    protect_content=protect_content,
-                    duration=dump_message.audio.duration,
-                    performer=dump_message.audio.performer,
-                    title=dump_message.audio.title,
-                    thumb=dump_message.audio.thumbs[0].file_id if dump_message.audio.thumbs else None
-                )
-            elif dump_message.photo:
-                user_message = await client.send_photo(
-                    chat_id=message.chat.id,
-                    photo=dump_message.photo.file_id,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML if caption else None,
-                    reply_markup=keyboard,
-                    protect_content=protect_content,
-                    has_spoiler=spoiler_enabled
-                )
-            elif dump_message.animation:
-                user_message = await client.send_animation(
-                    chat_id=message.chat.id,
-                    animation=dump_message.animation.file_id,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML if caption else None,
-                    reply_markup=keyboard,
-                    protect_content=protect_content,
-                    has_spoiler=spoiler_enabled,
-                    duration=dump_message.animation.duration,
-                    width=dump_message.animation.width,
-                    height=dump_message.animation.height,
-                    thumb=dump_message.animation.thumbs[0].file_id if dump_message.animation.thumbs else None
-                )
-            else:
-                print("⚠️ Unknown media type, falling back to copy_message")
-                user_message = await client.copy_message(
-                    chat_id=message.chat.id,
-                    from_chat_id=DUMP_CHAT_IDS[0],
-                    message_id=dump_message.id,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML if caption else None,
-                    reply_markup=keyboard,
-                    protect_content=protect_content
-                )
-
-        except Exception as e:
-            print(f"❌ Error sending with direct method: {e}")
-            user_message = await client.copy_message(
-                chat_id=message.chat.id,
-                from_chat_id=DUMP_CHAT_IDS[0],
-                message_id=dump_message.id,
-                caption=caption,
-                parse_mode=ParseMode.HTML if caption else None,
-                reply_markup=keyboard,
-                protect_content=protect_content
-            )
-
-        # Handle auto delete with warning
+        # Handle auto delete
         if auto_delete and user_message:
             warning_message = await message.reply_text(
                 f"<b>⚠️ ᴄᴏᴘʏʀɪɢʜᴛ ᴡᴀʀɴɪɴɢ</b>\n\n"
@@ -748,7 +525,7 @@ async def send_file_to_user_enhanced(client, message, dump_message, file_name, f
                 f"<i>💡 ғᴏʀᴡᴀʀᴅ ɪᴛ ǫᴜɪᴄᴋʟʏ ʙᴇғᴏʀᴇ ɪᴛ's ʀᴇᴍᴏᴠᴇᴅ..!</i>",
                 parse_mode=ParseMode.HTML
             )
-
+            
             asyncio.create_task(auto_delete_message_with_notification(
                 client,
                 message.chat.id,
@@ -757,85 +534,102 @@ async def send_file_to_user_enhanced(client, message, dump_message, file_name, f
                 file_name,
                 auto_delete_time
             ))
-
+        
         return user_message
-
+        
     except Exception as e:
-        print(f"❌ Error sending enhanced file to user: {e}")
+        await status_msg.edit_text(
+            f"<b>❌ ᴜᴘʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
+            f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+            f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
+            parse_mode=ParseMode.HTML
+        )
         return None
 
+# ==================== COPY TO DUMPS ====================
 
-async def auto_delete_message_with_notification(client, chat_id, file_message_id, warning_message_id, file_name, delay_seconds):
-    """Auto delete message after specified time with notification update"""
+async def copy_to_dumps(client, user_message, file_name, file_size):
+    """Copy user message to all dump channels"""
     try:
-        # Wait for the specified delay
-        await asyncio.sleep(delay_seconds)
+        # Create dump caption without inline keyboard
+        dump_caption = f"<b>{file_name}</b>\n<b>{format_bytes(file_size)}</b>"
         
-        # Delete the file message
-        try:
-            await client.delete_messages(chat_id, file_message_id)
-            print(f"✅ Auto-deleted file message {file_message_id} from chat {chat_id}")
-            
-            # Update warning message to show deletion notification
-            if warning_message_id:
-                try:
-                    await client.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=warning_message_id,
-                        text=f"<b><blockquote>🗑️ ғɪʟᴇ ᴅᴇʟᴇᴛᴇᴅ</b></blockquote>\n\n"
-                             f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                             f"<b>⏰ ᴅᴇʟᴇᴛᴇᴅ ᴀᴛ:</b> {datetime.now().strftime('%H:%M:%S')}\n\n"
-                             f"<i>💭 ᴛʜɪs ғɪʟᴇ ʜᴀs ʙᴇᴇɴ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ʀᴇᴍᴏᴠᴇᴅ</i>\n"
-                             f"<i>🔄 sᴇɴᴅ ᴛʜᴇ ʟɪɴᴋ ᴀɢᴀɪɴ ᴛᴏ ʀᴇ-ᴅᴏᴡɴʟᴏᴀᴅ</i>",
+        for dump_id in DUMP_CHAT_IDS:
+            try:
+                if user_message.video:
+                    await client.send_video(
+                        chat_id=dump_id,
+                        video=user_message.video.file_id,
+                        caption=dump_caption,
+                        supports_streaming=True,
+                        thumb=user_message.video.thumbs[0].file_id if user_message.video.thumbs else None,
+                        duration=user_message.video.duration,
+                        width=user_message.video.width,
+                        height=user_message.video.height,
+                        parse_mode=ParseMode.HTML,
+                        has_spoiler=False  # No spoiler in dump channels
+                    )
+                elif user_message.audio:
+                    await client.send_audio(
+                        chat_id=dump_id,
+                        audio=user_message.audio.file_id,
+                        caption=dump_caption,
+                        duration=user_message.audio.duration,
+                        performer=user_message.audio.performer,
+                        title=user_message.audio.title,
+                        thumb=user_message.audio.thumbs[0].file_id if user_message.audio.thumbs else None,
                         parse_mode=ParseMode.HTML
                     )
-                    print(f"✅ Updated warning message to deletion notification")
-                    
-                    
-                except Exception as e:
-                    print(f"❌ Error updating warning message: {e}")
-                    
-        except Exception as e:
-            print(f"❌ Error deleting file message: {e}")
-            
-            # If file deletion failed, still update warning message
-            if warning_message_id:
-                try:
-                    await client.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=warning_message_id,
-                        text=f"<b>❌ ᴅᴇʟᴇᴛɪᴏɴ ғᴀɪʟᴇᴅ</b>\n\n"
-                             f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-                             f"<b>⚠️ ᴄᴏᴜʟᴅ ɴᴏᴛ ᴀᴜᴛᴏ-ᴅᴇʟᴇᴛᴇ ᴛʜɪs ғɪʟᴇ</b>\n\n"
-                             f"<i>💡 ᴘʟᴇᴀsᴇ ᴅᴇʟᴇᴛᴇ ɪᴛ ᴍᴀɴᴜᴀʟʟʏ ɪғ ɴᴇᴇᴅᴇᴅ</i>",
+                elif user_message.document:
+                    await client.send_document(
+                        chat_id=dump_id,
+                        document=user_message.document.file_id,
+                        caption=dump_caption,
+                        thumb=user_message.document.thumbs[0].file_id if user_message.document.thumbs else None,
                         parse_mode=ParseMode.HTML
                     )
-                except Exception as e2:
-                    print(f"❌ Error updating warning message after deletion failure: {e2}")
-                    
+                elif user_message.photo:
+                    await client.send_photo(
+                        chat_id=dump_id,
+                        photo=user_message.photo.file_id,
+                        caption=dump_caption,
+                        parse_mode=ParseMode.HTML
+                    )
+                elif user_message.animation:
+                    await client.send_animation(
+                        chat_id=dump_id,
+                        animation=user_message.animation.file_id,
+                        caption=dump_caption,
+                        duration=user_message.animation.duration,
+                        width=user_message.animation.width,
+                        height=user_message.animation.height,
+                        thumb=user_message.animation.thumbs[0].file_id if user_message.animation.thumbs else None,
+                        parse_mode=ParseMode.HTML
+                    )
+                else:
+                    # Fallback to copy_message
+                    await client.copy_message(
+                        chat_id=dump_id,
+                        from_chat_id=user_message.chat.id,
+                        message_id=user_message.id,
+                        caption=dump_caption,
+                        parse_mode=ParseMode.HTML
+                    )
+                
+            except Exception as e:
+                pass  # Continue with other dump channels if one fails
+                
     except Exception as e:
-        print(f"❌ Error in auto delete with notification: {e}")
+        pass
 
-# Keep the old function for backward compatibility
-async def auto_delete_message(client, chat_id, message_id, delay_seconds):
-    """Auto delete message after specified time (simple version)"""
+# ==================== PROGRESS UPDATE FUNCTIONS ====================
+
+async def update_progress_concurrent(progress_tracker):
+    """Update progress message for concurrent downloads"""
     try:
-        await asyncio.sleep(delay_seconds)
-        await client.delete_messages(chat_id, message_id)
-        print(f"✅ Auto-deleted message {message_id} from chat {chat_id}")
-    except Exception as e:
-        print(f"❌ Error auto-deleting message: {e}")
-
-
-
-# ==================== PROGRESS UPDATE ====================
-
-async def update_progress(status_msg, user_id, url):
-    """Update progress message every few seconds"""
-    try:
-        while user_id in active_downloads:
-            progress_tracker = active_downloads[user_id]
-            
+        status_msg = progress_tracker.status_msg
+        
+        while progress_tracker.status != "ᴄᴏᴍᴘʟᴇᴛᴇᴅ":
             if progress_tracker.total_size > 0:
                 percentage = (progress_tracker.downloaded / progress_tracker.total_size) * 100
                 progress_bar = create_progress_bar(percentage)
@@ -853,7 +647,7 @@ async def update_progress(status_msg, user_id, url):
                 progress_text += f"<b>⏱️ ᴇᴛᴀ:</b> {eta_str}\n"
                 progress_text += f"<b>📁 ғɪʟᴇ:</b> <code>{os.path.basename(progress_tracker.filename)}</code>"
             else:
-                progress_text = f"<b>» sᴛᴀʀᴛɪɴɢ...</b>"
+                progress_text = f"<b>⏳ {progress_tracker.status}</b>"
             
             await safe_edit_message(status_msg, progress_text, ParseMode.HTML)
             await asyncio.sleep(3)
@@ -861,19 +655,111 @@ async def update_progress(status_msg, user_id, url):
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        print(f"❌ Progress update error: {e}")
+        pass
 
-# ==================== DOWNLOAD FUNCTION ====================
+async def update_upload_progress(status_msg, progress_data, file_name, part_num=None, total_parts=None):
+    """Update upload progress for user uploads"""
+    try:
+        while progress_data['current'] < progress_data['total']:
+            current = progress_data['current']
+            total = progress_data['total']
+            
+            if current == 0:
+                await asyncio.sleep(1)
+                continue
+            
+            now = time.time()
+            total_time = now - progress_data['start_time']
+            avg_speed = current / total_time if total_time > 0 else 0
+            
+            remaining_bytes = total - current
+            eta = remaining_bytes / avg_speed if avg_speed > 0 else 0
+            
+            percentage = (current / total) * 100 if total > 0 else 0
+            progress_bar = create_progress_bar(percentage)
+            
+            if part_num and total_parts:
+                status_text = f"<b>📤 sᴇɴᴅɪɴɢ ᴘᴀʀᴛ {part_num}/{total_parts}</b>\n\n"
+            else:
+                status_text = f"<b>📤 sᴇɴᴅɪɴɢ ᴛᴏ ʏᴏᴜ...</b>\n\n"
+            
+            status_text += (
+                f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+                f"<b>💾 sɪᴢᴇ:</b> {format_bytes(total)}\n\n"
+                f"<b>📊 ᴘʀᴏɢʀᴇss:</b>\n"
+                f"<code>{progress_bar}</code> <b>{percentage:.1f}%</b>\n\n"
+                f"<b>📤 sᴇɴᴛ:</b> {format_bytes(current)} / {format_bytes(total)}\n"
+                f"<b>📈 sᴘᴇᴇᴅ:</b> {format_bytes(avg_speed)}/s\n"
+                f"<b>⏱️ ᴇᴛᴀ:</b> {format_time(eta)}"
+            )
+            
+            await safe_edit_message(status_msg, status_text, ParseMode.HTML)
+            await asyncio.sleep(2)
+            
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        pass
+
+# ==================== AUTO DELETE FUNCTION ====================
+
+async def auto_delete_message_with_notification(client, chat_id, file_message_id, warning_message_id, file_name, delay_seconds):
+    """Auto delete message after specified time with notification update"""
+    try:
+        await asyncio.sleep(delay_seconds)
+        
+        try:
+            await client.delete_messages(chat_id, file_message_id)
+            
+            if warning_message_id:
+                try:
+                    await client.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=warning_message_id,
+                        text=f"<b><blockquote>🗑️ ғɪʟᴇ ᴅᴇʟᴇᴛᴇᴅ</b></blockquote>\n\n"
+                             f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+                             f"<b>⏰ ᴅᴇʟᴇᴛᴇᴅ ᴀᴛ:</b> {datetime.now().strftime('%H:%M:%S')}\n\n"
+                             f"<i>💭 ᴛʜɪs ғɪʟᴇ ʜᴀs ʙᴇᴇɴ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ʀᴇᴍᴏᴠᴇᴅ</i>\n"
+                             f"<i>🔄 sᴇɴᴅ ᴛʜᴇ ʟɪɴᴋ ᴀɢᴀɪɴ ᴛᴏ ʀᴇ-ᴅᴏᴡɴʟᴏᴀᴅ</i>",
+                        parse_mode=ParseMode.HTML
+                    )
+                except Exception:
+                    pass
+                    
+        except Exception:
+            if warning_message_id:
+                try:
+                    await client.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=warning_message_id,
+                        text=f"<b>❌ ᴅᴇʟᴇᴛɪᴏɴ ғᴀɪʟᴇᴅ</b>\n\n"
+                             f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+                             f"<b>⚠️ ᴄᴏᴜʟᴅ ɴᴏᴛ ᴀᴜᴛᴏ-ᴅᴇʟᴇᴛᴇ ᴛʜɪs ғɪʟᴇ</b>\n\n"
+                             f"<i>💡 ᴘʟᴇᴀsᴇ ᴅᴇʟᴇᴛᴇ ɪᴛ ᴍᴀɴᴜᴀʟʟʏ ɪғ ɴᴇᴇᴅᴇᴅ</i>",
+                        parse_mode=ParseMode.HTML
+                    )
+                except Exception:
+                    pass
+                    
+    except Exception:
+        pass
+
+# ==================== UTILITY FUNCTIONS ====================
+
+def is_video_file(file_path):
+    """Check if file is a video"""
+    mime_type, _ = mimetypes.guess_type(file_path)
+    return mime_type and mime_type.startswith("video/")
 
 def download_video(url, ydl_opts):
-    """Download video using yt-dlp with speed optimizations"""
+    """Download video using yt-dlp with optimizations"""
     try:
         import yt_dlp
         from urllib.parse import urlparse
         
         domain = urlparse(url).netloc.lower()
         
-        # Speed-optimized options
+        # Optimized options
         speed_opts = {
             **ydl_opts,
             'concurrent_fragment_downloads': 4,
@@ -932,19 +818,13 @@ def download_video(url, ydl_opts):
                 'concurrent_fragment_downloads': 3,
             })
         
-        print(f"🚀 Starting optimized download from {domain}...")
-        
         try:
             with yt_dlp.YoutubeDL(speed_opts) as ydl:
                 ydl.download([url])
-                print(f"✅ High-speed download successful")
                 return True
                 
-        except Exception as e:
-            print(f"❌ High-speed download failed: {e}")
-            
+        except Exception:
             # Fallback with conservative settings
-            print(f"🔄 Trying conservative fallback...")
             conservative_opts = {
                 **ydl_opts,
                 'format': 'worst/best',
@@ -959,14 +839,130 @@ def download_video(url, ydl_opts):
             try:
                 with yt_dlp.YoutubeDL(conservative_opts) as ydl_conservative:
                     ydl_conservative.download([url])
-                    print(f"✅ Conservative download successful")
                     return True
-            except Exception as e2:
-                print(f"❌ All download attempts failed: {e2}")
+            except Exception:
                 return False
                         
-    except Exception as e:
-        print(f"❌ Critical download error: {e}")
+    except Exception:
         return False
 
-print("✅ Download module loaded successfully")
+# ==================== CANCEL COMMAND ====================
+
+@Client.on_message(filters.private & filters.command("cancel"))
+async def cancel_downloads(client: Client, message: Message):
+    """Cancel all active downloads for user"""
+    try:
+        user_id = message.from_user.id
+        
+        if user_id not in active_downloads or not active_downloads[user_id]:
+            await message.reply_text(
+                "<b>❌ ɴᴏ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs</b>\n\n"
+                "ʏᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ ᴀɴʏ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs ᴛᴏ ᴄᴀɴᴄᴇʟ.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        cancelled_count = len(active_downloads[user_id])
+        
+        # Update all status messages
+        for tracker in active_downloads[user_id]:
+            try:
+                if tracker.status_msg:
+                    await tracker.status_msg.edit_text(
+                        "<b>❌ ᴅᴏᴡɴʟᴏᴀᴅ ᴄᴀɴᴄᴇʟʟᴇᴅ</b>\n\n"
+                        "ᴅᴏᴡɴʟᴏᴀᴅ ᴡᴀs ᴄᴀɴᴄᴇʟʟᴇᴅ ʙʏ ᴜsᴇʀ.",
+                        parse_mode=ParseMode.HTML
+                    )
+            except Exception:
+                pass
+        
+        # Clear active downloads
+        del active_downloads[user_id]
+        
+        await message.reply_text(
+            f"<b>✅ ᴅᴏᴡɴʟᴏᴀᴅs ᴄᴀɴᴄᴇʟʟᴇᴅ</b>\n\n"
+            f"<b>🚫 ᴄᴀɴᴄᴇʟʟᴇᴅ:</b> {cancelled_count} ᴅᴏᴡɴʟᴏᴀᴅ(s)\n"
+            f"<b>✨ sᴛᴀᴛᴜs:</b> ᴀʟʟ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs sᴛᴏᴘᴘᴇᴅ",
+            parse_mode=ParseMode.HTML
+        )
+        
+    except Exception as e:
+        await message.reply_text(
+            f"<b>❌ ᴇʀʀᴏʀ ᴄᴀɴᴄᴇʟʟɪɴɢ</b>\n\n<code>{str(e)}</code>",
+            parse_mode=ParseMode.HTML
+        )
+
+# ==================== STATUS COMMAND ====================
+
+@Client.on_message(filters.private & filters.command("status"))
+async def download_status(client: Client, message: Message):
+    """Show current download status for user"""
+    try:
+        user_id = message.from_user.id
+        
+        if user_id not in active_downloads or not active_downloads[user_id]:
+            await message.reply_text(
+                "<b>📊 ᴅᴏᴡɴʟᴏᴀᴅ sᴛᴀᴛᴜs</b>\n\n"
+                "<b>✅ ɴᴏ ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs</b>\n\n"
+                f"<b>📈 ᴍᴀx ᴄᴏɴᴄᴜʀʀᴇɴᴛ:</b> {MAX_CONCURRENT_DOWNLOADS}\n"
+                "<i>sᴇɴᴅ ᴀ ʟɪɴᴋ ᴛᴏ sᴛᴀʀᴛ ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ</i>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        status_text = f"<b>📊 ᴅᴏᴡɴʟᴏᴀᴅ sᴛᴀᴛᴜs</b>\n\n"
+        status_text += f"<b>🔄 ᴀᴄᴛɪᴠᴇ ᴅᴏᴡɴʟᴏᴀᴅs:</b> {len(active_downloads[user_id])}/{MAX_CONCURRENT_DOWNLOADS}\n\n"
+        
+        for i, tracker in enumerate(active_downloads[user_id], 1):
+            file_name = os.path.basename(tracker.filename) if tracker.filename else "Unknown"
+            if len(file_name) > 30:
+                file_name = file_name[:27] + "..."
+            
+            if tracker.total_size > 0:
+                percentage = (tracker.downloaded / tracker.total_size) * 100
+                downloaded_str = format_bytes(tracker.downloaded)
+                total_str = format_bytes(tracker.total_size)
+                speed_str = format_bytes(tracker.speed) + "/s" if tracker.speed > 0 else "0 B/s"
+                
+                status_text += f"<b>📥 ᴅᴏᴡɴʟᴏᴀᴅ #{i}</b>\n"
+                status_text += f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+                status_text += f"<b>📊 ᴘʀᴏɢʀᴇss:</b> {percentage:.1f}%\n"
+                status_text += f"<b>📦 sɪᴢᴇ:</b> {downloaded_str}/{total_str}\n"
+                status_text += f"<b>⚡ sᴘᴇᴇᴅ:</b> {speed_str}\n"
+                status_text += f"<b>⏱️ sᴛᴀᴛᴜs:</b> {tracker.status}\n\n"
+            else:
+                status_text += f"<b>📥 ᴅᴏᴡɴʟᴏᴀᴅ #{i}</b>\n"
+                status_text += f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
+                status_text += f"<b>⏱️ sᴛᴀᴛᴜs:</b> {tracker.status}\n\n"
+        
+        status_text += f"<i>💡 ᴜsᴇ /cancel ᴛᴏ sᴛᴏᴘ ᴀʟʟ ᴅᴏᴡɴʟᴏᴀᴅs</i>"
+        
+        await message.reply_text(status_text, parse_mode=ParseMode.HTML)
+        
+    except Exception as e:
+        await message.reply_text(
+            f"<b>❌ ᴇʀʀᴏʀ ɢᴇᴛᴛɪɴɢ sᴛᴀᴛᴜs</b>\n\n<code>{str(e)}</code>",
+            parse_mode=ParseMode.HTML
+        )
+
+# ==================== CLEANUP ON STARTUP ====================
+
+async def cleanup_on_startup():
+    """Clean up any leftover download directories on startup"""
+    try:
+        downloads_dir = "./downloads/"
+        if os.path.exists(downloads_dir):
+            for item in os.listdir(downloads_dir):
+                item_path = os.path.join(downloads_dir, item)
+                if os.path.isdir(item_path):
+                    try:
+                        cleanup_files(item_path)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+# Initialize cleanup on module load
+asyncio.create_task(cleanup_on_startup())
+
+print("✅ Enhanced download module loaded successfully with concurrent support")
