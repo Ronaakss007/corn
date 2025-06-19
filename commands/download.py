@@ -160,7 +160,7 @@ async def handle_url_message(client: Client, message: Message):
         active_downloads[user_id].append(progress_tracker)
         
         # Create status message
-        status_msg = await message.reply_text("<b>⏳ ɪɴɪᴛɪᴀʟɪᴢɪɴɢ...</b>", parse_mode=ParseMode.HTML)
+        status_msg = await message.reply_text("<b>›› ɪɴɪᴛɪᴀʟɪᴢɪɴɢ...</b>", parse_mode=ParseMode.HTML)
         progress_tracker.status_msg = status_msg
         
         # Extract metadata
@@ -258,6 +258,11 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
         uploaded_successfully = False
         total_file_size = 0
         uploaded_files = []
+
+        user_info = {
+            'id': message.from_user.id,
+            'name': message.from_user.first_name or message.from_user.username or "Gᴇɴɪᴇ"
+        }
         
         for file_path in downloaded_files:
             try:
@@ -269,7 +274,7 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
                 
                 if user_message:
                     # Then copy to all dump channels
-                    await copy_to_dumps(client, user_message, file_name, file_size)
+                    await copy_to_dumps(client, user_message, file_name, file_size, user_info)
                     
                     uploaded_successfully = True
                     total_file_size += file_size
@@ -421,7 +426,7 @@ async def upload_single_file_to_user(client, message, file_path, progress_tracke
         if part_num and total_parts:
             caption = f"<b>{file_name}</b>\n<b>📦 Part {part_num}/{total_parts} | {format_bytes(file_size)}</b>" if show_caption else None
         else:
-            caption = f"<b>{file_name}</b>\n<b>{format_bytes(file_size)}</b>" if show_caption else None
+            caption = f"<b>{file_name}</b> | <b>{format_bytes(file_size)}</b>" if show_caption else None
         
         keyboard = await create_user_keyboard(is_premium) if inline_buttons else None
         
@@ -547,12 +552,11 @@ async def upload_single_file_to_user(client, message, file_path, progress_tracke
         return None
 
 # ==================== COPY TO DUMPS ====================
-
-async def copy_to_dumps(client, user_message, file_name, file_size):
+async def copy_to_dumps(client, user_message, file_name, file_size, user_info):
     """Copy user message to all dump channels"""
     try:
         # Create dump caption without inline keyboard
-        dump_caption = f"<b>{file_name}</b>\n<b>{format_bytes(file_size)}</b>"
+        dump_caption = f"<b>{file_name}</b> | <b>{format_bytes(file_size)}</b>\n<b>ʟᴇᴇᴄʜᴇᴅ ʙʏ :</b> <a href='tg://user?id={user_info['id']}'>{user_info['name']}</a>"
         
         for dump_id in DUMP_CHAT_IDS:
             try:
@@ -647,7 +651,7 @@ async def update_progress_concurrent(progress_tracker):
                 progress_text += f"<b>⏱️ ᴇᴛᴀ:</b> {eta_str}\n"
                 progress_text += f"<b>📁 ғɪʟᴇ:</b> <code>{os.path.basename(progress_tracker.filename)}</code>"
             else:
-                progress_text = f"<b>⏳ {progress_tracker.status}</b>"
+                progress_text = f"<b>›› {progress_tracker.status}</b>"
             
             await safe_edit_message(status_msg, progress_text, ParseMode.HTML)
             await asyncio.sleep(3)
