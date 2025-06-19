@@ -208,6 +208,7 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
                     progress_tracker.status = "ᴄᴏᴍᴘʟᴇᴛᴇᴅ"
                     progress_tracker.filename = d.get('filename', 'Unknown')
             except Exception as e:
+                print(f"Progress hook error: {e}")
                 pass
         
         # Configure yt-dlp options
@@ -244,8 +245,9 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
         # Find downloaded files
         downloaded_files = []
         for file in os.listdir(download_dir):
-            if os.path.isfile(os.path.join(download_dir, file)):
-                downloaded_files.append(os.path.join(download_dir, file))
+            file_path = os.path.join(download_dir, file)
+            if os.path.isfile(file_path):
+                downloaded_files.append(file_path)
         
         if not downloaded_files:
             await status_msg.edit_text(
@@ -253,6 +255,10 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
                 parse_mode=ParseMode.HTML
             )
             return
+        
+        print(f"Found {len(downloaded_files)} files to upload")
+        for file_path in downloaded_files:
+            print(f"File: {file_path}, Size: {os.path.getsize(file_path)} bytes")
         
         # Process each downloaded file
         uploaded_successfully = False
@@ -269,12 +275,34 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
                 file_size = os.path.getsize(file_path)
                 file_name = os.path.basename(file_path)
                 
+                print(f"Processing file: {file_name}")
+                print(f"File size: {file_size} bytes ({file_size / (1024*1024*1024):.2f} GB)")
+                
+                # Sanitize filename for better compatibility
+                sanitized_name = sanitize_filename(file_name)
+                if sanitized_name != file_name:
+                    sanitized_path = os.path.join(os.path.dirname(file_path), sanitized_name)
+                    try:
+                        os.rename(file_path, sanitized_path)
+                        file_path = sanitized_path
+                        file_name = sanitized_name
+                        print(f"Renamed file to: {sanitized_name}")
+                    except Exception as rename_error:
+                        print(f"Failed to rename file: {rename_error}")
+                
                 # First upload to user with spoiler (for videos)
+                print(f"Starting upload for: {file_name}")
                 user_message = await upload_to_user_first(client, message, file_path, progress_tracker)
                 
                 if user_message:
+                    print(f"Successfully uploaded: {file_name}")
                     # Then copy to all dump channels
-                    await copy_to_dumps(client, user_message, file_name, file_size, user_info)
+                    try:
+                        await copy_to_dumps(client, user_message, file_name, file_size, user_info)
+                        print(f"Successfully copied to dump channels: {file_name}")
+                    except Exception as dump_error:
+                        print(f"Failed to copy to dump channels: {dump_error}")
+                        # Don't fail the whole process if dump copying fails
                     
                     uploaded_successfully = True
                     total_file_size += file_size
@@ -284,14 +312,17 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
                         'path': file_path
                     })
                 else:
+                    print(f"Failed to upload: {file_name}")
                     await message.reply_text(
-                        f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ ᴜᴘʟᴏᴀᴅ:</b> {os.path.basename(file_path)}",
+                        f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ ᴜᴘʟᴏᴀᴅ:</b> {os.path.basename(file_path)[:50]}{'...' if len(os.path.basename(file_path)) > 50 else ''}",
                         parse_mode=ParseMode.HTML
                     )
                 
-            except Exception as e:
+            except Exception as file_error:
+                print(f"Error processing file {file_path}: {file_error}")
                 await message.reply_text(
-                    f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇɴᴅ:</b> {os.path.basename(file_path)}",
+                    f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇɴᴅ:</b> {os.path.basename(file_path)[:50]}{'...' if len(os.path.basename(file_path)) > 50 else ''}\n"
+                    f"<b>ᴇʀʀᴏʀ:</b> <code>{str(file_error)[:100]}</code>",
                     parse_mode=ParseMode.HTML
                 )
         
@@ -310,8 +341,10 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
                     file_type = 'document'
                 
                 success = await update_download_stats(user_id, username, url, total_file_size, file_type)
+                print(f"Database stats updated: {success}")
 
-            except Exception as e:
+            except Exception as db_error:
+                print(f"Database update error: {db_error}")
                 pass
         
         # Delete the status message after everything is done
@@ -331,8 +364,9 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
             )
         
     except Exception as e:
+        print(f"Main download_and_send_concurrent error: {e}")
         await status_msg.edit_text(
-            f"<b>❌ ᴇʀʀᴏʀ:</b> {str(e)}",
+            f"<b>❌ ᴇʀʀᴏʀ:</b> {str(e)[:200]}{'...' if len(str(e)) > 200 else ''}",
             parse_mode=ParseMode.HTML
         )
     
@@ -344,65 +378,147 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
             if not active_downloads[user_id]:
                 del active_downloads[user_id]
 
+def sanitize_filename(filename):
+    """Sanitize filename for better compatibility"""
+    import re
+    
+    # Remove or replace problematic characters
+    filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+    
+    # Replace multiple spaces with single space
+    filename = re.sub(r'\s+', ' ', filename)
+    
+    # Remove leading/trailing spaces and dots
+    filename = filename.strip(' .')
+    
+    # Limit filename length (keep extension)
+    name, ext = os.path.splitext(filename)
+    if len(name) > 200:  # Leave room for extension and path
+        name = name[:200]
+    
+    return name + ext
+
+
 # ==================== UPLOAD TO USER FIRST ====================
 
 async def upload_to_user_first(client, message, file_path, progress_tracker):
     """Upload file to user first with spoiler support for videos"""
     try:
+        if not os.path.exists(file_path):
+            print(f"File does not exist: {file_path}")
+            return None
+            
         file_size = os.path.getsize(file_path)
         file_name = os.path.basename(file_path)
         status_msg = progress_tracker.status_msg
         
-        # Check if file needs splitting
-        if file_size > 1.98 * 1024 * 1024 * 1024:
+        print(f"upload_to_user_first called for: {file_name}")
+        print(f"File size: {file_size} bytes")
+        
+        # Check if file needs splitting (Telegram limit is 2GB, we use 1.98GB as safety margin)
+        MAX_FILE_SIZE = 1.98 * 1024 * 1024 * 1024  # 1.98 GB in bytes
+        
+        if file_size > MAX_FILE_SIZE:
+            print(f"File needs splitting: {file_size} > {MAX_FILE_SIZE}")
             await status_msg.edit_text(
                 f"<b>📦 sᴘʟɪᴛᴛɪɴɢ ʟᴀʀɢᴇ ғɪʟᴇ</b>\n\n"
-                f"<b>📁 ғɪʟᴇ:</b> {file_name}\n"
-                f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}",
+                f"<b>📁 ғɪʟᴇ:</b> {file_name[:50]}{'...' if len(file_name) > 50 else ''}\n"
+                f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
+                f"<b>🔄 sᴛᴀᴛᴜs:</b> ᴘʀᴇᴘᴀʀɪɴɢ ᴛᴏ sᴘʟɪᴛ...",
                 parse_mode=ParseMode.HTML
             )
             
-            if is_video_file(file_path):
-                from helper_func import split_video
-                file_chunks = await split_video(file_path)
-            else:
-                from helper_func import split_file
-                file_chunks = split_file(file_path)
-            
-            uploaded_messages = []
-            
-            for i, chunk_path in enumerate(file_chunks, 1):
-                chunk_size = os.path.getsize(chunk_path)
-                chunk_name = os.path.basename(chunk_path)
+            try:
+                # Import splitting functions
+                if is_video_file(file_path):
+                    print("Splitting as video file")
+                    try:
+                        from helper_func import split_video
+                        file_chunks = await split_video(file_path)
+                    except ImportError:
+                        print("split_video not available, using generic split")
+                        from helper_func import split_file
+                        file_chunks = await split_file(file_path) if asyncio.iscoroutinefunction(split_file) else split_file(file_path)
+                else:
+                    print("Splitting as regular file")
+                    from helper_func import split_file
+                    file_chunks = await split_file(file_path) if asyncio.iscoroutinefunction(split_file) else split_file(file_path)
                 
+                if not file_chunks:
+                    print("No chunks returned from splitting")
+                    await status_msg.edit_text(
+                        f"<b>❌ sᴘʟɪᴛᴛɪɴɢ ғᴀɪʟᴇᴅ</b>\n\n"
+                        f"<b>📁 ғɪʟᴇ:</b> {file_name[:50]}{'...' if len(file_name) > 50 else ''}\n"
+                        f"<b>❌ ᴇʀʀᴏʀ:</b> ᴄᴏᴜʟᴅ ɴᴏᴛ sᴘʟɪᴛ ғɪʟᴇ",
+                        parse_mode=ParseMode.HTML
+                    )
+                    return None
+                
+                print(f"File split into {len(file_chunks)} chunks")
+                uploaded_messages = []
+                
+                for i, chunk_path in enumerate(file_chunks, 1):
+                    if not os.path.exists(chunk_path):
+                        print(f"Chunk {i} does not exist: {chunk_path}")
+                        continue
+                        
+                    chunk_size = os.path.getsize(chunk_path)
+                    chunk_name = os.path.basename(chunk_path)
+                    
+                    print(f"Uploading chunk {i}/{len(file_chunks)}: {chunk_name}")
+                    
+                    await status_msg.edit_text(
+                        f"<b>📤 sᴇɴᴅɪɴɢ ᴘᴀʀᴛ {i}/{len(file_chunks)}</b>\n\n"
+                        f"<b>📁 ғɪʟᴇ:</b> {chunk_name[:50]}{'...' if len(chunk_name) > 50 else ''}\n"
+                        f"<b>💾 sɪᴢᴇ:</b> {format_bytes(chunk_size)}\n"
+                        f"<b>📊 ᴘʀᴏɢʀᴇss:</b> {i}/{len(file_chunks)} ᴘᴀʀᴛs",
+                        parse_mode=ParseMode.HTML
+                    )
+                    
+                    chunk_msg = await upload_single_file_to_user(client, message, chunk_path, progress_tracker, i, len(file_chunks))
+                    if chunk_msg:
+                        uploaded_messages.append(chunk_msg)
+                        print(f"Successfully uploaded chunk {i}")
+                    else:
+                        print(f"Failed to upload chunk {i}")
+                    
+                    # Clean up chunk file after upload
+                    try:
+                        os.remove(chunk_path)
+                        print(f"Cleaned up chunk: {chunk_path}")
+                    except Exception as cleanup_error:
+                        print(f"Failed to remove chunk {chunk_path}: {cleanup_error}")
+                
+                # Return the first uploaded message for dump channel copying
+                return uploaded_messages[0] if uploaded_messages else None
+                
+            except Exception as split_error:
+                print(f"Splitting error: {split_error}")
                 await status_msg.edit_text(
-                    f"<b>📤 sᴇɴᴅɪɴɢ ᴘᴀʀᴛ {i}/{len(file_chunks)}</b>\n\n"
-                    f"<b>📁 ғɪʟᴇ:</b> {chunk_name}\n"
-                    f"<b>💾 sɪᴢᴇ:</b> {format_bytes(chunk_size)}",
+                    f"<b>❌ sᴘʟɪᴛᴛɪɴɢ ғᴀɪʟᴇᴅ</b>\n\n"
+                    f"<b>📁 ғɪʟᴇ:</b> {file_name[:50]}{'...' if len(file_name) > 50 else ''}\n"
+                    f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(split_error)[:100]}</code>",
                     parse_mode=ParseMode.HTML
                 )
-                
-                chunk_msg = await upload_single_file_to_user(client, message, chunk_path, progress_tracker, i, len(file_chunks))
-                if chunk_msg:
-                    uploaded_messages.append(chunk_msg)
-                
-                try:
-                    os.remove(chunk_path)
-                except Exception:
-                    pass
-            
-            return uploaded_messages[0] if uploaded_messages else None
+                return None
         else:
+            # File is under the limit, upload normally
+            print(f"File is under size limit, uploading normally")
             return await upload_single_file_to_user(client, message, file_path, progress_tracker)
             
-    except Exception as e:
-        await status_msg.edit_text(
-            f"<b>❌ ᴜᴘʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
-            f"<b>📁 ғɪʟᴇ:</b> <code>{file_name}</code>\n"
-            f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(e)}</code>",
-            parse_mode=ParseMode.HTML
-        )
+    except Exception as main_error:
+        print(f"upload_to_user_first main error: {main_error}")
+        try:
+            await status_msg.edit_text(
+                f"<b>❌ ᴜᴘʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
+                f"<b>📁 ғɪʟᴇ:</b> <code>{file_name[:50] if 'file_name' in locals() else 'Unknown'}{'...' if 'file_name' in locals() and len(file_name) > 50 else ''}</code>\n"
+                f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(main_error)[:100]}</code>",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as edit_error:
+            print(f"Failed to edit status message: {edit_error}")
         return None
+
 
 async def upload_single_file_to_user(client, message, file_path, progress_tracker, part_num=None, total_parts=None):
     """Upload single file to user with enhanced features"""
