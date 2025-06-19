@@ -36,7 +36,7 @@ DUMP_CHAT_IDS = Config.DUMP_CHAT_IDS
 
 # Global variables to track downloads - Support multiple downloads per user
 active_downloads = {}  # user_id: [list of ProgressTracker objects]
-MAX_CONCURRENT_DOWNLOADS = 3  # Maximum concurrent downloads per user
+MAX_CONCURRENT_DOWNLOADS = 10  # Maximum concurrent downloads per user
 
 class ProgressTracker:
     def __init__(self, url, download_id):
