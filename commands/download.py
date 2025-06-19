@@ -804,9 +804,26 @@ def download_video(url, ydl_opts):
             })
         elif 'instagram' in domain:
             speed_opts.update({
-                'format': 'best/worst',
+                'format': 'best[height<=2160]/best[height<=1080]/best[height<=720]/best',  # Support up to 2K
                 'concurrent_fragment_downloads': 2,
+                'cookiefile': None,  # We'll use cookies string instead
+                'http_headers': {
+                    **speed_opts.get('http_headers', {}),
+                    'Cookie': 'ig_did=5F30EC1A-E526-4D97-B373-19788410E2CE; csrftoken=ycZ7eUDnykKtR8upEyrek5; datr=66fOZ5Qiu1l_cU4uP2cKjA69; mid=Z_zyYwALAAG7Oecyackg3FnHYIbK; ds_user_id=53761245194; ps_l=1; ps_n=1; sessionid=53761245194%3Aiuj8gwGXuvt5z5%3A26%3AAYdoBvwXYdn8FhG6dPUPV2TNN5oHTYLIjDfFerlypw; dpr=1.25; wd=775x735; rur="HIL\05453761245194\0541781864652:01fef3e329bbcd4bb1db01afb346ef2a68726a2965cab4061f3f388195412625b8f76154"',
+                    'Origin': 'https://www.instagram.com',
+                    'Referer': 'https://www.instagram.com/',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-CSRFToken': 'ycZ7eUDnykKtR8upEyrek5',
+                    'X-Instagram-AJAX': '1',
+                },
+                'extractor_args': {
+                    'instagram': {
+                        'api_version': 'v1',
+                        'include_stories': True,
+                    }
+                }
             })
+
         elif any(adult_site in domain for adult_site in ['pornhub', 'xvideos', 'xnxx', 'xhamster']):
             speed_opts.update({
                 'format': 'best[height<=1080]/best[height<=720]/best',  # Fixed: added height values
