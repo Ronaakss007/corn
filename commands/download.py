@@ -825,27 +825,75 @@ def download_video(url, ydl_opts):
             })
 
         elif any(adult_site in domain for adult_site in ['pornhub', 'xvideos', 'xnxx', 'xhamster']):
+            # Enhanced anti-detection for adult sites
+            import random
+            
+            # Rotate User-Agents
+            user_agents = [
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            ]
+            
+            selected_ua = random.choice(user_agents)
+            
             speed_opts.update({
                 'format': 'best[height<=1080]/best[height<=720]/best',
-                'concurrent_fragment_downloads': 4,  # Reduced from 6
+                'concurrent_fragment_downloads': 2,  # Further reduced
                 'http_headers': {
-                    **speed_opts['http_headers'],
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+                    'User-Agent': selected_ua,
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                     'Accept-Language': 'en-US,en;q=0.9',
                     'Accept-Encoding': 'gzip, deflate, br',
-                    'Cache-Control': 'no-cache',
-                    'Pragma': 'no-cache',
+                    'Cache-Control': 'max-age=0',
+                    'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                    'Sec-Ch-Ua-Mobile': '?0',
+                    'Sec-Ch-Ua-Platform': '"Windows"',
                     'Sec-Fetch-Dest': 'document',
                     'Sec-Fetch-Mode': 'navigate',
                     'Sec-Fetch-Site': 'none',
                     'Sec-Fetch-User': '?1',
                     'Upgrade-Insecure-Requests': '1',
                     'Referer': f'https://{domain}/',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
                 },
-                'sleep_interval': 1,  # Add delay between requests
-                'max_sleep_interval': 3,
+                'sleep_interval': 2,  # Increased delay
+                'max_sleep_interval': 5,
+                'socket_timeout': 60,
+                'retries': 5,
+                'fragment_retries': 5,
+                'retry_sleep_functions': {
+                    'http': lambda n: min(3 ** n, 30),  # Exponential backoff
+                    'fragment': lambda n: min(2 ** n, 10)
+                },
+                # Additional anti-detection measures
+                'extractor_args': {
+                    'generic': {
+                        'variant_m3u8': True,
+                    }
+                },
+                'http_chunk_size': 512 * 1024,  # Smaller chunks
+                'no_check_certificate': True,
+                'prefer_insecure': False,  # Use HTTPS when possible
             })
+            
+            # Site-specific optimizations
+            if 'xhamster' in domain:
+                speed_opts.update({
+                    'format': 'worst/best',  # Try worst quality first for xhamster
+                    'concurrent_fragment_downloads': 1,  # Single thread for xhamster
+                    'sleep_interval': 3,
+                    'max_sleep_interval': 8,
+                    'http_headers': {
+                        **speed_opts['http_headers'],
+                        'Accept': '*/*',
+                        'X-Requested-With': 'XMLHttpRequest',
+                    }
+                })
+
         else:
             speed_opts.update({
                 'format': 'best[height<=720]/best[height<=480]/best',  # Also improved this
