@@ -1,3 +1,4 @@
+
 import os
 import re
 import time
@@ -254,14 +255,14 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
             await status_msg.edit_text(
                 "<b>❌ ᴅᴏᴡɴʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
                 f"<b>🔗 ᴜʀʟ:</b> <code>{url[:100]}{'...' if len(url) > 100 else ''}</code>\n"
-                "ᴛʜᴇ ᴠɪᴅᴇᴏ ᴄᴏᴜʟᴅ ɴᴏᴛ ʙᴇ ᴅᴏᴡɴʟᴏᴀᴅᴇᴅ.",
+                "ᴛʜᴇ ᴠɪᴅᴇᴏ ᴄᴏᴜʟᴅ ɴᴏᴛ ʙᴇ ᴅᴏᴡɴʟᴏᴀᴅᴇᴅ.\n"
+                "ᴘᴏssɪʙʟᴇ ʀᴇᴀsᴏɴs: ɪɴᴠᴀʟɪᴅ ᴜʀʟ, ᴘʀɪᴠᴀᴛᴇ ᴠɪᴅᴇᴏ, ᴏʀ ɴᴇᴛᴡᴏʀᴋ ɪssᴜᴇ",
                 parse_mode=ParseMode.HTML
             )
             return
         
         await status_msg.edit_text(
-            "<b>✅ ᴅᴏᴡɴʟᴏᴀᴅ ᴄᴏᴍᴘʟᴇᴛᴇᴅ!</b>\n\n"
-            "<b>📋 ᴘʀᴇᴘᴀʀɪɴɢ ғɪʟᴇs ғᴏʀ ᴜᴘʟᴏᴀᴅ...</b>",
+            "<b>›› ᴅᴏᴡɴʟᴏᴀᴅᴇᴅ..!</b>",
             parse_mode=ParseMode.HTML
         )
         
@@ -281,11 +282,11 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
                 if os.path.isfile(file_path):
                     downloaded_files.append(file_path)
                     
-        except Exception as list_error:
-            print(f"Error listing downloaded files: {list_error}")
+        except Exception as file_error:
+            print(f"Error listing downloaded files: {file_error}")
             await status_msg.edit_text(
                 f"<b>❌ ᴇʀʀᴏʀ ʟɪsᴛɪɴɢ ғɪʟᴇs</b>\n\n"
-                f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(list_error)}</code>",
+                f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(file_error)}</code>",
                 parse_mode=ParseMode.HTML
             )
             return
@@ -293,71 +294,48 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
         if not downloaded_files:
             await status_msg.edit_text(
                 "<b>❌ ɴᴏ ғɪʟᴇs ғᴏᴜɴᴅ!</b>\n\n"
-                f"<b>📁 ᴅɪʀᴇᴄᴛᴏʀʏ:</b> <code>{download_dir}</code>",
+                "ɴᴏ ғɪʟᴇs ᴡᴇʀᴇ ᴅᴏᴡɴʟᴏᴀᴅᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.",
                 parse_mode=ParseMode.HTML
             )
             return
         
         print(f"Found {len(downloaded_files)} files to upload")
+        for file_path in downloaded_files:
+            print(f"File: {file_path}, Size: {os.path.getsize(file_path)} bytes")
         
         # Process each downloaded file
         uploaded_successfully = False
         total_file_size = 0
         uploaded_files = []
-        failed_uploads = []
 
         user_info = {
             'id': message.from_user.id,
             'name': message.from_user.first_name or message.from_user.username or "Gᴇɴɪᴇ"
         }
         
-        for file_index, file_path in enumerate(downloaded_files, 1):
+        for file_path in downloaded_files:
             try:
-                if not os.path.exists(file_path):
-                    error_msg = f"File no longer exists: {file_path}"
-                    print(error_msg)
-                    failed_uploads.append({
-                        'file': os.path.basename(file_path),
-                        'error': 'File not found'
-                    })
-                    continue
-                
                 file_size = os.path.getsize(file_path)
                 file_name = os.path.basename(file_path)
                 
-                print(f"Processing file {file_index}/{len(downloaded_files)}: {file_name}")
+                print(f"Processing file: {file_name}")
                 print(f"File size: {file_size} bytes ({file_size / (1024*1024*1024):.2f} GB)")
                 
-                # Sanitize filename
-                try:
-                    sanitized_name = sanitize_filename(file_name)
-                    if sanitized_name != file_name:
-                        sanitized_path = os.path.join(os.path.dirname(file_path), sanitized_name)
-                        try:
-                            os.rename(file_path, sanitized_path)
-                            file_path = sanitized_path
-                            file_name = sanitized_name
-                            print(f"Renamed file to: {sanitized_name}")
-                        except Exception as rename_error:
-                            print(f"Failed to rename file: {rename_error}")
-                except Exception as sanitize_error:
-                    print(f"Error sanitizing filename: {sanitize_error}")
+                # Sanitize filename for better compatibility
+                sanitized_name = sanitize_filename(file_name)
+                if sanitized_name != file_name:
+                    sanitized_path = os.path.join(os.path.dirname(file_path), sanitized_name)
+                    try:
+                        os.rename(file_path, sanitized_path)
+                        file_path = sanitized_path
+                        file_name = sanitized_name
+                        print(f"Renamed file to: {sanitized_name}")
+                    except Exception as rename_error:
+                        print(f"Failed to rename file: {rename_error}")
                 
-                # Update status for current file
-                try:
-                    await status_msg.edit_text(
-                        f"<b>📤 ᴜᴘʟᴏᴀᴅɪɴɢ ғɪʟᴇ {file_index}/{len(downloaded_files)}</b>\n\n"
-                        f"<b>📁 ғɪʟᴇ:</b> <code>{file_name[:50]}{'...' if len(file_name) > 50 else ''}</code>\n"
-                        f"<b>💾 sɪᴢᴇ:</b> {format_bytes(file_size)}\n"
-                        f"<b>🔄 sᴛᴀᴛᴜs:</b> ᴘʀᴇᴘᴀʀɪɴɢ ᴜᴘʟᴏᴀᴅ...",
-                        parse_mode=ParseMode.HTML
-                    )
-                except Exception as status_error:
-                    print(f"Error updating status message: {status_error}")
-                
-                # Upload to user first
+                # First upload to user with spoiler (for videos)
                 print(f"Starting upload for: {file_name}")
-                user_message = await handle_file_upload(client, message, file_path, progress_tracker)
+                user_message = await upload_to_user_first(client, message, file_path, progress_tracker)
                 
                 if user_message:
                     print(f"Successfully uploaded: {file_name}")
@@ -367,6 +345,7 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
                         print(f"Successfully copied to dump channels: {file_name}")
                     except Exception as dump_error:
                         print(f"Failed to copy to dump channels: {dump_error}")
+                        # Don't fail the whole process if dump copying fails
                     
                     uploaded_successfully = True
                     total_file_size += file_size
@@ -376,42 +355,21 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
                         'path': file_path
                     })
                 else:
-                    error_msg = f"Upload failed for: {file_name}"
-                    print(error_msg)
-                    failed_uploads.append({
-                        'file': file_name,
-                        'error': 'Upload function returned None'
-                    })
+                    print(f"Failed to upload: {file_name}")
+                    await message.reply_text(
+                        f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ ᴜᴘʟᴏᴀᴅ:</b> {os.path.basename(file_path)[:50]}{'...' if len(os.path.basename(file_path)) > 50 else ''}",
+                        parse_mode=ParseMode.HTML
+                    )
                 
             except Exception as file_error:
-                error_msg = f"Error processing file {file_path}: {file_error}"
-                print(error_msg)
-                import traceback
-                traceback.print_exc()
-                
-                failed_uploads.append({
-                    'file': os.path.basename(file_path) if 'file_path' in locals() else 'Unknown',
-                    'error': str(file_error)
-                })
-        
-        # Report results
-        if uploaded_successfully:
-            try:
-                await status_msg.delete()
-                await message.delete()
-            except Exception:
-                await status_msg.edit_text(
-                    f"<b>✅ ᴜᴘʟᴏᴀᴅ ᴄᴏᴍᴘʟᴇᴛᴇ!</b>\n\n"
-                    f"<b>📤 ᴜᴘʟᴏᴀᴅᴇᴅ:</b> {len(uploaded_files)} ғɪʟᴇ(s)",
+                print(f"Error processing file {file_path}: {file_error}")
+                await message.reply_text(
+                    f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇɴᴅ:</b> {os.path.basename(file_path)[:50]}{'...' if len(os.path.basename(file_path)) > 50 else ''}\n"
+                    f"<b>ᴇʀʀᴏʀ:</b> <code>{str(file_error)[:100]}</code>",
                     parse_mode=ParseMode.HTML
                 )
-        else:
-            await status_msg.edit_text(
-                "<b>❌ ᴀʟʟ ᴜᴘʟᴏᴀᴅs ғᴀɪʟᴇᴅ!</b>",
-                parse_mode=ParseMode.HTML
-            )
         
-        # Update database stats
+        # Update database stats after successful uploads
         if uploaded_successfully and total_file_size > 0:
             try:
                 site_domain = extract_domain(url)
@@ -427,43 +385,46 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
                 
                 success = await update_download_stats(user_id, username, url, total_file_size, file_type)
                 print(f"Database stats updated: {success}")
+
             except Exception as db_error:
                 print(f"Database update error: {db_error}")
+                pass
         
-    except Exception as main_error:
-        print(f"Main error: {main_error}")
-        import traceback
-        traceback.print_exc()
-        
-        try:
+        # Delete the status message after everything is done
+        if uploaded_successfully:
+            try:
+                await status_msg.delete()
+                await message.delete()
+            except Exception:
+                await status_msg.edit_text(
+                    "<b>✅ ᴀʟʟ ᴅᴏɴᴇ!</b>",
+                    parse_mode=ParseMode.HTML
+                )
+        else:
             await status_msg.edit_text(
-                f"<b>❌ ᴄʀɪᴛɪᴄᴀʟ ᴇʀʀᴏʀ</b>\n\n"
-                f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(main_error)[:300]}</code>",
+                "<b>❌ ɴᴏ ғɪʟᴇs ᴜᴘʟᴏᴀᴅᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!</b>",
                 parse_mode=ParseMode.HTML
             )
-        except Exception:
-            pass
+        
+    except Exception as e:
+        print(f"Main download_and_send_concurrent error: {e}")
+        await status_msg.edit_text(
+            f"<b>❌ ᴇʀʀᴏʀ:</b> {str(e)[:200]}{'...' if len(str(e)) > 200 else ''}",
+            parse_mode=ParseMode.HTML
+        )
     
     finally:
-        # Cleanup
-        try:
-            if 'download_dir' in locals() and os.path.exists(download_dir):
-                cleanup_files(download_dir)
-        except Exception as cleanup_error:
-            print(f"Cleanup error: {cleanup_error}")
-        
+        cleanup_files(download_dir)
         # Remove from active downloads
-        try:
-            if user_id in active_downloads:
-                active_downloads[user_id] = [t for t in active_downloads[user_id] if t.download_id != download_id]
-                if not active_downloads[user_id]:
-                    del active_downloads[user_id]
-        except Exception:
-            pass
+        if user_id in active_downloads:
+            active_downloads[user_id] = [t for t in active_downloads[user_id] if t.download_id != download_id]
+            if not active_downloads[user_id]:
+                del active_downloads[user_id]
 
-# ==================== FILE UPLOAD HANDLER ====================
-async def handle_file_upload(client, message, file_path, progress_tracker):
-    """Handle file upload with splitting support"""
+# ==================== UPLOAD TO USER FIRST ====================
+
+async def upload_to_user_first(client, message, file_path, progress_tracker):
+    """Upload file to user first with spoiler support for videos"""
     try:
         if not os.path.exists(file_path):
             print(f"File does not exist: {file_path}")
@@ -473,8 +434,8 @@ async def handle_file_upload(client, message, file_path, progress_tracker):
         file_name = os.path.basename(file_path)
         status_msg = progress_tracker.status_msg
         
-        print(f"handle_file_upload called for: {file_name}")
-        print(f"File size: {file_size} bytes ({file_size / (1024*1024*1024):.2f} GB)")
+        print(f"upload_to_user_first called for: {file_name}")
+        print(f"File size: {file_size} bytes")
         
         # Check if file needs splitting (Telegram limit is 2GB, we use 1.98GB as safety margin)
         MAX_FILE_SIZE = 1.98 * 1024 * 1024 * 1024  # 1.98 GB in bytes
@@ -490,7 +451,7 @@ async def handle_file_upload(client, message, file_path, progress_tracker):
             )
             
             try:
-                # Split the file
+                # Import splitting functions
                 if is_video_file(file_path):
                     print("Splitting as video file")
                     try:
@@ -498,12 +459,14 @@ async def handle_file_upload(client, message, file_path, progress_tracker):
                         file_chunks = await split_video(file_path)
                     except ImportError:
                         print("split_video not available, using generic split")
-                        file_chunks = await split_file_generic(file_path)
+                        from helper_func import split_file
+                        file_chunks = await split_file(file_path) if asyncio.iscoroutinefunction(split_file) else split_file(file_path)
                 else:
                     print("Splitting as regular file")
-                    file_chunks = await split_file_generic(file_path)
+                    from helper_func import split_file
+                    file_chunks = await split_file(file_path) if asyncio.iscoroutinefunction(split_file) else split_file(file_path)
                 
-                if not file_chunks or len(file_chunks) == 0:
+                if not file_chunks:
                     print("No chunks returned from splitting")
                     await status_msg.edit_text(
                         f"<b>❌ sᴘʟɪᴛᴛɪɴɢ ғᴀɪʟᴇᴅ</b>\n\n"
@@ -534,7 +497,7 @@ async def handle_file_upload(client, message, file_path, progress_tracker):
                         parse_mode=ParseMode.HTML
                     )
                     
-                    chunk_msg = await upload_single_file(client, message, chunk_path, progress_tracker, i, len(file_chunks))
+                    chunk_msg = await upload_single_file_to_user(client, message, chunk_path, progress_tracker, i, len(file_chunks))
                     if chunk_msg:
                         uploaded_messages.append(chunk_msg)
                         print(f"Successfully uploaded chunk {i}")
@@ -553,8 +516,6 @@ async def handle_file_upload(client, message, file_path, progress_tracker):
                 
             except Exception as split_error:
                 print(f"Splitting error: {split_error}")
-                import traceback
-                traceback.print_exc()
                 await status_msg.edit_text(
                     f"<b>❌ sᴘʟɪᴛᴛɪɴɢ ғᴀɪʟᴇᴅ</b>\n\n"
                     f"<b>📁 ғɪʟᴇ:</b> {file_name[:50]}{'...' if len(file_name) > 50 else ''}\n"
@@ -565,520 +526,20 @@ async def handle_file_upload(client, message, file_path, progress_tracker):
         else:
             # File is under the limit, upload normally
             print(f"File is under size limit, uploading normally")
-            return await upload_single_file(client, message, file_path, progress_tracker)
+            return await upload_single_file_to_user(client, message, file_path, progress_tracker)
             
     except Exception as main_error:
-        print(f"handle_file_upload main error: {main_error}")
-        import traceback
-        traceback.print_exc()
+        print(f"upload_to_user_first main error: {main_error}")
         try:
             await status_msg.edit_text(
                 f"<b>❌ ᴜᴘʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
                 f"<b>📁 ғɪʟᴇ:</b> <code>{file_name[:50] if 'file_name' in locals() else 'Unknown'}{'...' if 'file_name' in locals() and len(file_name) > 50 else ''}</code>\n"
-                f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(main_error)[:200]}</code>",
+                f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(main_error)[:100]}</code>",
                 parse_mode=ParseMode.HTML
             )
         except Exception as edit_error:
             print(f"Failed to edit status message: {edit_error}")
         return None
-
-# ==================== SINGLE FILE UPLOAD ====================
-
-async def upload_single_file(client, message, file_path, progress_tracker, part_num=None, total_parts=None):
-    """Upload single file to user with enhanced features"""
-    try:
-        file_size = os.path.getsize(file_path)
-        file_name = os.path.basename(file_path)
-        status_msg = progress_tracker.status_msg
-        
-        print(f"Uploading single file: {file_name}, Size: {file_size} bytes")
-        
-        # Get user settings
-        try:
-            settings = await get_file_settings()
-            is_premium = await is_premium_user(message.from_user.id)
-        except Exception as settings_error:
-            print(f"Error getting user settings: {settings_error}")
-            # Use default settings
-            settings = {
-                'protect_content': False,
-                'show_caption': True,
-                'auto_delete': False,
-                'auto_delete_time': 300,
-                'inline_buttons': True,
-                'spoiler_enabled': False
-            }
-            is_premium = False
-        
-        protect_content = settings.get('protect_content', False)
-        show_caption = settings.get('show_caption', True)
-        auto_delete = settings.get('auto_delete', False)
-        auto_delete_time = settings.get('auto_delete_time', 300)
-        inline_buttons = settings.get('inline_buttons', True)
-        spoiler_enabled = settings.get('spoiler_enabled', False)
-        
-        # Create caption
-        if part_num and total_parts:
-            caption = f"<b>{file_name}</b>\n<b>📦 Part {part_num}/{total_parts} | {format_bytes(file_size)}</b>" if show_caption else None
-        else:
-            caption = f"<b>{file_name}</b> | <b>{format_bytes(file_size)}</b>" if show_caption else None
-        
-        try:
-            keyboard = await create_user_keyboard(is_premium) if inline_buttons else None
-        except Exception as keyboard_error:
-            print(f"Error creating keyboard: {keyboard_error}")
-            keyboard = None
-        
-        # Progress tracking
-        upload_start_time = time.time()
-        progress_data = {
-            'current': 0,
-            'total': file_size,
-            'start_time': upload_start_time
-        }
-        
-        def upload_progress(current, total):
-            progress_data['current'] = current
-            progress_data['total'] = total
-        
-        # Start progress update task
-        progress_task = asyncio.create_task(update_upload_progress_simple(status_msg, progress_data, file_name, part_num, total_parts))
-        
-        # Generate thumbnail for videos
-        thumbnail_path = None
-        if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
-            try:
-                thumbnail_path = f"{os.path.dirname(file_path)}/thumb_{int(time.time())}.jpg"
-                generated_thumb = await generate_thumbnail(file_path, thumbnail_path, 10)
-                if not generated_thumb:
-                    thumbnail_path = None
-            except Exception as thumb_error:
-                print(f"Error generating thumbnail: {thumb_error}")
-                thumbnail_path = None
-        
-        # Get video dimensions
-        width, height = 1280, 720
-        if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
-            try:
-                width, height = await get_video_dimensions(file_path)
-            except Exception as dim_error:
-                print(f"Error getting video dimensions: {dim_error}")
-                width, height = 1280, 720
-        
-        user_message = None
-        metadata = progress_tracker.metadata
-        
-        try:
-            if file_path.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
-                # Send as video with spoiler support
-                user_message = await client.send_video(
-                    chat_id=message.chat.id,
-                    video=file_path,
-                    caption=caption,
-                    supports_streaming=True,
-                    thumb=thumbnail_path,
-                    duration=int(metadata.get('duration', 0)) if metadata else 0,
-                    width=width,
-                    height=height,
-                    progress=upload_progress,
-                    parse_mode=ParseMode.HTML if caption else None,
-                    reply_markup=keyboard,
-                    protect_content=protect_content,
-                    has_spoiler=spoiler_enabled  # Spoiler for videos
-                )
-            elif file_path.lower().endswith(('.mp3', '.m4a', '.wav', '.flac', '.ogg')):
-                # Send as audio
-                user_message = await client.send_audio(
-                    chat_id=message.chat.id,
-                    audio=file_path,
-                    caption=caption,
-                    duration=int(metadata.get('duration', 0)) if metadata else 0,
-                    performer=metadata.get('uploader', 'Unknown') if metadata else 'Unknown',
-                    title=metadata.get('title', file_name) if metadata else file_name,
-                    thumb=thumbnail_path,
-                    progress=upload_progress,
-                    parse_mode=ParseMode.HTML if caption else None,
-                    reply_markup=keyboard,
-                    protect_content=protect_content
-                )
-            else:
-                # Send as document
-                user_message = await client.send_document(
-                    chat_id=message.chat.id,
-                    document=file_path,
-                    caption=caption,
-                    thumb=thumbnail_path,
-                    progress=upload_progress,
-                    parse_mode=ParseMode.HTML if caption else None,
-                    reply_markup=keyboard,
-                    protect_content=protect_content
-                )
-        
-        except Exception as upload_error:
-            print(f"Upload error: {upload_error}")
-            import traceback
-            traceback.print_exc()
-            raise upload_error
-        
-        finally:
-            # Cancel progress task
-            try:
-                progress_task.cancel()
-                await asyncio.sleep(0.1)
-            except Exception:
-                pass
-            
-            # Clean up thumbnail
-            if thumbnail_path and os.path.exists(thumbnail_path):
-                try:
-                    os.remove(thumbnail_path)
-                except Exception as thumb_cleanup_error:
-                    print(f"Error cleaning up thumbnail: {thumb_cleanup_error}")
-        
-        print(f"Successfully uploaded: {file_name}")
-        return user_message
-        
-    except Exception as main_error:
-        print(f"upload_single_file error: {main_error}")
-        import traceback
-        traceback.print_exc()
-        try:
-            await status_msg.edit_text(
-                f"<b>❌ ᴜᴘʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
-                f"<b>📁 ғɪʟᴇ:</b> <code>{file_name if 'file_name' in locals() else 'Unknown'}</code>\n"
-                f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(main_error)[:200]}</code>",
-                parse_mode=ParseMode.HTML
-            )
-        except Exception:
-            pass
-        return None
-
-# ==================== GENERIC FILE SPLITTING ====================
-
-async def split_file_generic(file_path, max_size=1.95 * 1024 * 1024 * 1024):
-    """
-    Split any file into parts by size
-    """
-    try:
-        print(f"Starting generic file split for: {file_path}")
-        
-        if not os.path.exists(file_path):
-            print(f"❌ File does not exist: {file_path}")
-            return [file_path]
-        
-        file_size = os.path.getsize(file_path)
-        print(f"File size: {file_size} bytes ({file_size / (1024*1024*1024):.2f} GB)")
-        
-        if file_size <= max_size:
-            print("File is under size limit, no splitting needed")
-            return [file_path]
-
-        chunks = []
-        chunk_num = 1
-        
-        p = Path(file_path)
-        base_name = p.stem
-        extension = p.suffix
-        folder = p.parent
-
-        print(f"Splitting into chunks of max {max_size} bytes each")
-        
-        try:
-            with open(file_path, 'rb') as input_file:
-                while True:
-                    chunk_data = input_file.read(int(max_size))
-                    if not chunk_data:
-                        break
-                    
-                    output_file = folder / f"{base_name}.part{chunk_num:03d}{extension}"
-                    
-                    print(f"Creating chunk {chunk_num}: {output_file}")
-                    
-                    with open(output_file, 'wb') as output_chunk:
-                        output_chunk.write(chunk_data)
-                    
-                    if os.path.exists(output_file):
-                        chunk_size = os.path.getsize(output_file)
-                        print(f"✅ Created chunk {chunk_num}: {chunk_size} bytes")
-                        chunks.append(str(output_file))
-                        chunk_num += 1
-                    else:
-                        print(f"❌ Failed to create chunk {chunk_num}")
-                        break
-
-        except Exception as split_error:
-            print(f"Error during file splitting: {split_error}")
-            # Clean up any partial chunks
-            for chunk_path in chunks:
-                try:
-                    if os.path.exists(chunk_path):
-                        os.remove(chunk_path)
-                except Exception:
-                    pass
-            return [file_path]
-
-        if chunks:
-            print(f"✅ Successfully split file into {len(chunks)} parts")
-            return chunks
-        else:
-            print("❌ No chunks created, returning original file")
-            return [file_path]
-
-    except Exception as e:
-        print(f"❌ Error splitting file: {e}")
-        import traceback
-        traceback.print_exc()
-        return [file_path]
-
-# ==================== SIMPLIFIED PROGRESS UPDATE ====================
-
-async def update_upload_progress_simple(status_msg, progress_data, file_name, part_num=None, total_parts=None):
-    """Simplified upload progress update"""
-    try:
-        last_update = 0
-        while progress_data['current'] < progress_data['total']:
-            current = progress_data['current']
-            total = progress_data['total']
-            
-            if current == 0:
-                await asyncio.sleep(1)
-                continue
-            
-            # Only update every 3 seconds to avoid rate limits
-            now = time.time()
-            if now - last_update < 3:
-                await asyncio.sleep(1)
-                continue
-            
-            last_update = now
-            
-            total_time = now - progress_data['start_time']
-            avg_speed = current / total_time if total_time > 0 else 0
-            
-            remaining_bytes = total - current
-            eta = remaining_bytes / avg_speed if avg_speed > 0 else 0
-            
-            percentage = (current / total) * 100 if total > 0 else 0
-            progress_bar = create_progress_bar(percentage)
-            
-            if part_num and total_parts:
-                status_text = f"<b>📤 sᴇɴᴅɪɴɢ ᴘᴀʀᴛ {part_num}/{total_parts}</b>\n\n"
-            else:
-                status_text = f"<b>📤 sᴇɴᴅɪɴɢ ᴛᴏ ʏᴏᴜ...</b>\n\n"
-            
-            status_text += (
-                f"<b>📁 ғɪʟᴇ:</b> <code>{file_name[:40]}{'...' if len(file_name) > 40 else ''}</code>\n"
-                f"<b>💾 sɪᴢᴇ:</b> {format_bytes(total)}\n\n"
-                f"<b>📊 ᴘʀᴏɢʀᴇss:</b>\n"
-                f"<code>{progress_bar}</code> <b>{percentage:.1f}%</b>\n\n"
-                f"<b>📤 sᴇɴᴛ:</b> {format_bytes(current)} / {format_bytes(total)}\n"
-                f"<b>📈 sᴘᴇᴇᴅ:</b> {format_bytes(avg_speed)}/s\n"
-                f"<b>⏱️ ᴇᴛᴀ:</b> {format_time(eta)}"
-            )
-            
-            try:
-                await status_msg.edit_text(status_text, parse_mode=ParseMode.HTML)
-            except Exception as edit_error:
-                print(f"Error updating progress: {edit_error}")
-                # Don't break the loop for edit errors
-            
-            await asyncio.sleep(2)
-            
-    except asyncio.CancelledError:
-        print("Progress update task cancelled")
-        pass
-    except Exception as e:
-        print(f"Progress update error: {e}")
-        pass
-
-# ==================== UTILITY FUNCTIONS ====================
-
-def sanitize_filename(filename):
-    """Sanitize filename for better compatibility"""
-    import re
-    
-    try:
-        # Remove or replace problematic characters
-        filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
-        
-        # Replace multiple spaces with single space
-        filename = re.sub(r'\s+', ' ', filename)
-        
-        # Remove leading/trailing spaces and dots
-        filename = filename.strip(' .')
-        
-        # Remove control characters
-        filename = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', filename)
-        
-        # Limit filename length (keep extension)
-        name, ext = os.path.splitext(filename)
-        if len(name) > 200:  # Leave room for extension and path
-            name = name[:200]
-        
-        # Ensure we don't have an empty filename
-        if not name.strip():
-            name = f"file_{int(time.time())}"
-        
-        sanitized = name + ext
-        print(f"Sanitized filename: '{filename}' -> '{sanitized}'")
-        return sanitized
-        
-    except Exception as e:
-        print(f"Error sanitizing filename '{filename}': {e}")
-        # Fallback to timestamp-based name
-        timestamp = int(time.time())
-        ext = os.path.splitext(filename)[1] if '.' in filename else ''
-        return f"file_{timestamp}{ext}"
-
-def is_video_file(file_path):
-    """Check if file is a video based on extension"""
-    try:
-        video_extensions = ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv', '.m4v', '.3gp', '.ts', '.m2ts']
-        file_ext = Path(file_path).suffix.lower()
-        return file_ext in video_extensions
-    except Exception as e:
-        print(f"Error checking if file is video: {e}")
-        return False
-
-def create_progress_bar(percentage):
-    """Create a progress bar string"""
-    try:
-        filled_length = int(percentage // 10)
-        bar = '█' * filled_length + '░' * (10 - filled_length)
-        return bar
-    except Exception:
-        return '░░░░░░░░░░'
-
-def format_time(seconds):
-    """Format time in seconds to readable format"""
-    try:
-        if seconds <= 0:
-            return "ᴜɴᴋɴᴏᴡɴ"
-        
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        
-        if hours > 0:
-            return f"{hours}ʜ {minutes}ᴍ {secs}s"
-        elif minutes > 0:
-            return f"{minutes}ᴍ {secs}s"
-        else:
-            return f"{secs}s"
-    except Exception:
-        return "ᴜɴᴋɴᴏᴡɴ"
-
-# ==================== PLACEHOLDER FUNCTIONS ====================
-
-async def get_file_settings():
-    """Get file upload settings - placeholder function"""
-    try:
-        # Return default settings if function not implemented
-        return {
-            'protect_content': False,
-            'show_caption': True,
-            'auto_delete': False,
-            'auto_delete_time': 300,
-            'inline_buttons': True,
-            'spoiler_enabled': False
-        }
-    except Exception:
-        return {
-            'protect_content': False,
-            'show_caption': True,
-            'auto_delete': False,
-            'auto_delete_time': 300,
-            'inline_buttons': True,
-            'spoiler_enabled': False
-        }
-
-async def is_premium_user(user_id):
-    """Check if user is premium - placeholder function"""
-    try:
-        # Implement your premium user check logic here
-        return False
-    except Exception:
-        return False
-
-async def create_user_keyboard(is_premium):
-    """Create user keyboard - placeholder function"""
-    try:
-        # Return None if not implemented
-        return None
-    except Exception:
-        return None
-
-async def generate_thumbnail(video_path, thumb_path, time_offset=10):
-    """Generate thumbnail for video - placeholder function"""
-    try:
-        import subprocess
-        
-        cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-ss", str(time_offset),
-            "-i", video_path,
-            "-vframes", "1",
-            "-vf", "scale=320:240",
-            "-y", thumb_path
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, timeout=30)
-        
-        if result.returncode == 0 and os.path.exists(thumb_path):
-            return True
-        else:
-            return False
-            
-    except Exception as e:
-        print(f"Error generating thumbnail: {e}")
-        return False
-
-async def get_video_dimensions(video_path):
-    """Get video dimensions - placeholder function"""
-    try:
-        import subprocess
-        
-        cmd = [
-            "ffprobe", "-v", "quiet", "-print_format", "json",
-            "-show_streams", "-select_streams", "v:0", video_path
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        
-        if result.returncode == 0:
-            import json
-            data = json.loads(result.stdout)
-            if data.get('streams'):
-                stream = data['streams'][0]
-                width = stream.get('width', 1280)
-                height = stream.get('height', 720)
-                return width, height
-        
-        return 1280, 720
-        
-    except Exception as e:
-        print(f"Error getting video dimensions: {e}")
-        return 1280, 720
-
-async def safe_edit_message(message, text, parse_mode):
-    """Safely edit message with error handling"""
-    try:
-        await message.edit_text(text, parse_mode=parse_mode)
-    except Exception as e:
-        print(f"Error editing message: {e}")
-        pass
-
-def cleanup_files(directory):
-    """Clean up files in directory"""
-    try:
-        import shutil
-        if os.path.exists(directory):
-            shutil.rmtree(directory)
-            print(f"Cleaned up directory: {directory}")
-    except Exception as e:
-        print(f"Error cleaning up directory {directory}: {e}")
-
-print("✅ Enhanced download module with proper error handling loaded successfully")
 
 async def upload_single_file_to_user(client, message, file_path, progress_tracker, part_num=None, total_parts=None):
     """Upload single file to user with enhanced features"""
@@ -1297,9 +758,11 @@ async def copy_to_dumps(client, user_message, file_name, file_size, user_info):
                     )
                 
             except Exception as e:
+                print(f"Failed to copy to dump channel {dump_id}: {e}")
                 pass  # Continue with other dump channels if one fails
                 
     except Exception as e:
+        print(f"Error in copy_to_dumps: {e}")
         pass
 
 # ==================== PROGRESS UPDATE FUNCTIONS ====================
@@ -1335,6 +798,7 @@ async def update_progress_concurrent(progress_tracker):
     except asyncio.CancelledError:
         pass
     except Exception as e:
+        print(f"Progress update error: {e}")
         pass
 
 async def update_upload_progress(status_msg, progress_data, file_name, part_num=None, total_parts=None):
@@ -1379,6 +843,7 @@ async def update_upload_progress(status_msg, progress_data, file_name, part_num=
     except asyncio.CancelledError:
         pass
     except Exception as e:
+        print(f"Upload progress update error: {e}")
         pass
 
 # ==================== AUTO DELETE FUNCTION ====================
@@ -1425,6 +890,26 @@ async def auto_delete_message_with_notification(client, chat_id, file_message_id
         pass
 
 # ==================== UTILITY FUNCTIONS ====================
+
+def sanitize_filename(filename):
+    """Sanitize filename for better compatibility"""
+    import re
+    
+    # Remove or replace problematic characters
+    filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
+    
+    # Replace multiple spaces with single space
+    filename = re.sub(r'\s+', ' ', filename)
+    
+    # Remove leading/trailing spaces and dots
+    filename = filename.strip(' .')
+    
+    # Limit filename length (keep extension)
+    name, ext = os.path.splitext(filename)
+    if len(name) > 200:  # Leave room for extension and path
+        name = name[:200]
+    
+    return name + ext
 
 def is_video_file(file_path):
     """Check if file is a video"""
