@@ -826,12 +826,25 @@ def download_video(url, ydl_opts):
 
         elif any(adult_site in domain for adult_site in ['pornhub', 'xvideos', 'xnxx', 'xhamster']):
             speed_opts.update({
-                'format': 'best[height<=1080]/best[height<=720]/best',  # Fixed: added height values
-                'concurrent_fragment_downloads': 6,
+                'format': 'best[height<=1080]/best[height<=720]/best',
+                'concurrent_fragment_downloads': 4,  # Reduced from 6
                 'http_headers': {
                     **speed_opts['http_headers'],
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Cache-Control': 'no-cache',
+                    'Pragma': 'no-cache',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Upgrade-Insecure-Requests': '1',
                     'Referer': f'https://{domain}/',
-                }
+                },
+                'sleep_interval': 1,  # Add delay between requests
+                'max_sleep_interval': 3,
             })
         else:
             speed_opts.update({
