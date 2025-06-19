@@ -335,14 +335,38 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
                 
                 # First upload to user with spoiler (for videos)
                 print(f"Starting upload for: {file_name}")
-                user_message = await upload_to_user_first(client, message, file_path, progress_tracker)
+                user_messages = await upload_to_user_first(client, message, file_path, progress_tracker)
                 
-                if user_message:
+                if user_messages:
                     print(f"Successfully uploaded: {file_name}")
-                    # Then copy to all dump channels
+                    
+                    # Handle both single message and list of messages
+                    if not isinstance(user_messages, list):
+                        user_messages = [user_messages]
+                    
+                    # Copy ALL messages to dump channels
                     try:
-                        await copy_to_dumps(client, user_message, file_name, file_size, user_info)
-                        print(f"Successfully copied to dump channels: {file_name}")
+                        for user_message in user_messages:
+                            # Get the actual file size from the message
+                            msg_file_size = 0
+                            msg_file_name = ""
+                            
+                            if user_message.video:
+                                msg_file_size = user_message.video.file_size
+                                msg_file_name = user_message.video.file_name or file_name
+                            elif user_message.audio:
+                                msg_file_size = user_message.audio.file_size
+                                msg_file_name = user_message.audio.file_name or file_name
+                            elif user_message.document:
+                                msg_file_size = user_message.document.file_size
+                                msg_file_name = user_message.document.file_name or file_name
+                            else:
+                                msg_file_size = file_size
+                                msg_file_name = file_name
+                            
+                            await copy_to_dumps(client, user_message, msg_file_name, msg_file_size, user_info)
+                            print(f"Successfully copied to dump channels: {msg_file_name}")
+                            
                     except Exception as dump_error:
                         print(f"Failed to copy to dump channels: {dump_error}")
                         # Don't fail the whole process if dump copying fails
@@ -511,8 +535,8 @@ async def upload_to_user_first(client, message, file_path, progress_tracker):
                     except Exception as cleanup_error:
                         print(f"Failed to remove chunk {chunk_path}: {cleanup_error}")
                 
-                # Return the first uploaded message for dump channel copying
-                return uploaded_messages[0] if uploaded_messages else None
+                # Return ALL uploaded messages for dump channel copying
+                return uploaded_messages if uploaded_messages else None
                 
             except Exception as split_error:
                 print(f"Splitting error: {split_error}")
@@ -540,6 +564,7 @@ async def upload_to_user_first(client, message, file_path, progress_tracker):
         except Exception as edit_error:
             print(f"Failed to edit status message: {edit_error}")
         return None
+
 
 async def upload_single_file_to_user(client, message, file_path, progress_tracker, part_num=None, total_parts=None):
     """Upload single file to user with enhanced features"""
