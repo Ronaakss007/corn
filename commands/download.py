@@ -5,9 +5,6 @@ import time
 import asyncio
 import yt_dlp
 import aiohttp
-import re
-import requests
-from urllib.parse import urlparse, parse_qs
 import aiofiles
 import json
 import logging
@@ -74,155 +71,6 @@ def not_admin_user(_, __, message):
     """Check if user is not an admin"""
     from helper_func import check_admin
     return not check_admin(None, message.from_user)
-
-# ==================== GOOGLE DRIVE FUNCTIONS ====================
-
-def extract_gdrive_file_id(url):
-    """Extract file ID from Google Drive URL"""
-    try:
-        # Pattern 1: https://drive.google.com/file/d/FILE_ID/view
-        pattern1 = r'/file/d/([a-zA-Z0-9-_]+)'
-        match1 = re.search(pattern1, url)
-        if match1:
-            return match1.group(1)
-        
-        # Pattern 2: https://drive.google.com/open?id=FILE_ID
-        pattern2 = r'[?&]id=([a-zA-Z0-9-_]+)'
-        match2 = re.search(pattern2, url)
-        if match2:
-            return match2.group(1)
-        
-        # Pattern 3: https://drive.google.com/uc?id=FILE_ID
-        pattern3 = r'[?&]id=([a-zA-Z0-9-_]+)'
-        match3 = re.search(pattern3, url)
-        if match3:
-            return match3.group(1)
-            
-        return None
-    except Exception as e:
-        print(f"Error extracting Google Drive file ID: {e}")
-        return None
-
-async def get_gdrive_file_info(file_id):
-    """Get Google Drive file information"""
-    try:
-        # Use the export/download URL to get file info
-        info_url = f"https://drive.google.com/file/d/{file_id}/view"
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        
-        response = requests.get(info_url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            # Extract filename from page content
-            filename_pattern = r'"title":"([^"]+)"'
-            filename_match = re.search(filename_pattern, response.text)
-            filename = filename_match.group(1) if filename_match else f"gdrive_file_{file_id}"
-            
-            # Try to get file size (this might not always work)
-            size_pattern = r'"size":"(\d+)"'
-            size_match = re.search(size_pattern, response.text)
-            file_size = int(size_match.group(1)) if size_match else 0
-            
-            return {
-                'filename': filename,
-                'file_size': file_size,
-                'file_id': file_id
-            }
-        
-        return None
-        
-    except Exception as e:
-        print(f"Error getting Google Drive file info: {e}")
-        return None
-
-async def download_gdrive_file(file_id, download_path, progress_tracker):
-    """Download file from Google Drive"""
-    try:
-        # Try direct download first
-        download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        
-        session = requests.Session()
-        response = session.get(download_url, headers=headers, stream=True, timeout=30)
-        
-        # Check if we need to handle the "large file" confirmation
-        if 'confirm=' in response.text or 'download_warning' in response.text:
-            # Extract confirmation token
-            confirm_pattern = r'confirm=([^&]+)'
-            confirm_match = re.search(confirm_pattern, response.text)
-            
-            if confirm_match:
-                confirm_token = confirm_match.group(1)
-                download_url = f"https://drive.google.com/uc?export=download&confirm={confirm_token}&id={file_id}"
-                response = session.get(download_url, headers=headers, stream=True, timeout=30)
-            else:
-                # Try alternative method for large files
-                confirm_url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t"
-                response = session.get(confirm_url, headers=headers, stream=True, timeout=30)
-        
-        if response.status_code != 200:
-            print(f"Failed to download Google Drive file: HTTP {response.status_code}")
-            return False
-        
-        # Get filename from Content-Disposition header if available
-        content_disposition = response.headers.get('Content-Disposition', '')
-        if 'filename=' in content_disposition:
-            filename_match = re.search(r'filename="([^"]+)"', content_disposition)
-            if filename_match:
-                filename = filename_match.group(1)
-            else:
-                filename = f"gdrive_file_{file_id}"
-        else:
-            filename = f"gdrive_file_{file_id}"
-        
-        # Ensure download directory exists
-        os.makedirs(os.path.dirname(download_path), exist_ok=True)
-        
-        # Get total file size
-        total_size = int(response.headers.get('Content-Length', 0))
-        progress_tracker.total_size = total_size
-        progress_tracker.filename = os.path.join(download_path, filename)
-        progress_tracker.status = "ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ"
-        
-        # Download the file
-        file_path = os.path.join(download_path, filename)
-        downloaded = 0
-        
-        with open(file_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    progress_tracker.downloaded = downloaded
-                    
-                    # Calculate speed
-                    elapsed_time = time.time() - progress_tracker.start_time
-                    if elapsed_time > 0:
-                        progress_tracker.speed = downloaded / elapsed_time
-        
-        progress_tracker.status = "ᴄᴏᴍᴘʟᴇᴛᴇᴅ"
-        return True
-        
-    except Exception as e:
-        print(f"Error downloading Google Drive file: {e}")
-        progress_tracker.status = f"ᴇʀʀᴏʀ: {str(e)}"
-        return False
-
-def is_gdrive_url(url):
-    """Check if URL is a Google Drive link"""
-    gdrive_patterns = [
-        r'drive\.google\.com',
-        r'docs\.google\.com',
-    ]
-    
-    return any(re.search(pattern, url.lower()) for pattern in gdrive_patterns)
-
 
 @Client.on_message(filters.private & filters.text & ~filters.command([
     "start", "ping", "help", "stats", "mystats", "leaderboard", "history", "cancel",
@@ -343,88 +191,259 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
     url = progress_tracker.url
     status_msg = progress_tracker.status_msg
     
-def download_gdrive_file(file_id, download_path, progress_tracker):
-    """Download file from Google Drive (synchronous version)"""
     try:
-        # Try direct download first
-        download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        download_dir = f"./downloads/{download_id}/"
+        os.makedirs(download_dir, exist_ok=True)
+        print(f"Created download directory: {download_dir}")
         
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        def progress_hook(d):
+            """Progress hook for yt-dlp"""
+            try:
+                if d['status'] == 'downloading':
+                    progress_tracker.downloaded = d.get('downloaded_bytes', 0)
+                    progress_tracker.total_size = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
+                    progress_tracker.speed = d.get('speed', 0) or 0
+                    progress_tracker.eta = d.get('eta', 0) or 0
+                    progress_tracker.filename = d.get('filename', 'Unknown')
+                    progress_tracker.status = "ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ"
+                elif d['status'] == 'finished':
+                    progress_tracker.status = "ᴄᴏᴍᴘʟᴇᴛᴇᴅ"
+                    progress_tracker.filename = d.get('filename', 'Unknown')
+            except Exception as e:
+                print(f"Progress hook error: {e}")
+                pass
+        
+        # Configure yt-dlp options
+        try:
+            ydl_opts = get_download_options(url)
+            ydl_opts.update({
+                'outtmpl': f'{download_dir}%(title)s.%(ext)s',
+                'progress_hooks': [progress_hook],
+            })
+            print(f"Configured yt-dlp options for URL: {url}")
+        except Exception as opts_error:
+            print(f"Error configuring yt-dlp options: {opts_error}")
+            await status_msg.edit_text(
+                f"<b>❌ ᴄᴏɴғɪɢᴜʀᴀᴛɪᴏɴ ᴇʀʀᴏʀ</b>\n\n"
+                f"<b>🔗 ᴜʀʟ:</b> <code>{url[:100]}{'...' if len(url) > 100 else ''}</code>\n"
+                f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(opts_error)}</code>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        # Start progress update task
+        progress_task = asyncio.create_task(update_progress_concurrent(progress_tracker))
+        
+        # Download in a separate thread
+        try:
+            print(f"Starting download for URL: {url}")
+            loop = asyncio.get_event_loop()
+            success = await loop.run_in_executor(None, download_video, url, ydl_opts)
+            print(f"Download completed. Success: {success}")
+        except Exception as download_error:
+            print(f"Download execution error: {download_error}")
+            success = False
+        
+        # Cancel progress updates
+        try:
+            progress_task.cancel()
+            await asyncio.sleep(0.1)
+        except Exception as cancel_error:
+            print(f"Error cancelling progress task: {cancel_error}")
+        
+        if not success:
+            await status_msg.edit_text(
+                "<b>❌ ᴅᴏᴡɴʟᴏᴀᴅ ғᴀɪʟᴇᴅ!</b>\n\n"
+                f"<b>🔗 ᴜʀʟ:</b> <code>{url[:100]}{'...' if len(url) > 100 else ''}</code>\n"
+                "ᴛʜᴇ ᴠɪᴅᴇᴏ ᴄᴏᴜʟᴅ ɴᴏᴛ ʙᴇ ᴅᴏᴡɴʟᴏᴀᴅᴇᴅ.\n"
+                "ᴘᴏssɪʙʟᴇ ʀᴇᴀsᴏɴs: ɪɴᴠᴀʟɪᴅ ᴜʀʟ, ᴘʀɪᴠᴀᴛᴇ ᴠɪᴅᴇᴏ, ᴏʀ ɴᴇᴛᴡᴏʀᴋ ɪssᴜᴇ",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        await status_msg.edit_text(
+            "<b>›› ᴅᴏᴡɴʟᴏᴀᴅᴇᴅ..!</b>",
+            parse_mode=ParseMode.HTML
+        )
+        
+        # Find downloaded files
+        downloaded_files = []
+        try:
+            if not os.path.exists(download_dir):
+                print(f"Download directory does not exist: {download_dir}")
+                await status_msg.edit_text(
+                    "<b>❌ ᴅᴏᴡɴʟᴏᴀᴅ ᴅɪʀᴇᴄᴛᴏʀʏ ɴᴏᴛ ғᴏᴜɴᴅ!</b>",
+                    parse_mode=ParseMode.HTML
+                )
+                return
+            
+            for file in os.listdir(download_dir):
+                file_path = os.path.join(download_dir, file)
+                if os.path.isfile(file_path):
+                    downloaded_files.append(file_path)
+                    
+        except Exception as file_error:
+            print(f"Error listing downloaded files: {file_error}")
+            await status_msg.edit_text(
+                f"<b>❌ ᴇʀʀᴏʀ ʟɪsᴛɪɴɢ ғɪʟᴇs</b>\n\n"
+                f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(file_error)}</code>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        if not downloaded_files:
+            await status_msg.edit_text(
+                "<b>❌ ɴᴏ ғɪʟᴇs ғᴏᴜɴᴅ!</b>\n\n"
+                "ɴᴏ ғɪʟᴇs ᴡᴇʀᴇ ᴅᴏᴡɴʟᴏᴀᴅᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        print(f"Found {len(downloaded_files)} files to upload")
+        for file_path in downloaded_files:
+            print(f"File: {file_path}, Size: {os.path.getsize(file_path)} bytes")
+        
+        # Process each downloaded file
+        uploaded_successfully = False
+        total_file_size = 0
+        uploaded_files = []
+
+        user_info = {
+            'id': message.from_user.id,
+            'name': message.from_user.first_name or message.from_user.username or "Gᴇɴɪᴇ"
         }
         
-        session = requests.Session()
-        response = session.get(download_url, headers=headers, stream=True, timeout=30)
-        
-        # Check if we need to handle the "large file" confirmation
-        if 'confirm=' in response.text or 'download_warning' in response.text:
-            # Extract confirmation token
-            confirm_pattern = r'confirm=([^&]+)'
-            confirm_match = re.search(confirm_pattern, response.text)
-            
-            if confirm_match:
-                confirm_token = confirm_match.group(1)
-                download_url = f"https://drive.google.com/uc?export=download&confirm={confirm_token}&id={file_id}"
-                response = session.get(download_url, headers=headers, stream=True, timeout=30)
-            else:
-                # Try alternative method for large files
-                confirm_url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm=t"
-                response = session.get(confirm_url, headers=headers, stream=True, timeout=30)
-        
-        if response.status_code != 200:
-            print(f"Failed to download Google Drive file: HTTP {response.status_code}")
-            return False
-        
-        # Get filename from Content-Disposition header if available
-        content_disposition = response.headers.get('Content-Disposition', '')
-        if 'filename=' in content_disposition:
-            filename_match = re.search(r'filename="([^"]+)"', content_disposition)
-            if filename_match:
-                filename = filename_match.group(1)
-            else:
-                filename = f"gdrive_file_{file_id}"
-        else:
-            # Try to get filename from progress_tracker metadata
-            if hasattr(progress_tracker, 'metadata') and progress_tracker.metadata:
-                filename = progress_tracker.metadata.get('filename', f"gdrive_file_{file_id}")
-            else:
-                filename = f"gdrive_file_{file_id}"
-        
-        # Ensure download directory exists
-        os.makedirs(download_path, exist_ok=True)
-        
-        # Get total file size
-        total_size = int(response.headers.get('Content-Length', 0))
-        if total_size > 0:
-            progress_tracker.total_size = total_size
-        
-        progress_tracker.filename = os.path.join(download_path, filename)
-        progress_tracker.status = "ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ"
-        
-        # Download the file
-        file_path = os.path.join(download_path, filename)
-        downloaded = 0
-        
-        with open(file_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    progress_tracker.downloaded = downloaded
+        for file_path in downloaded_files:
+            try:
+                file_size = os.path.getsize(file_path)
+                file_name = os.path.basename(file_path)
+                
+                print(f"Processing file: {file_name}")
+                print(f"File size: {file_size} bytes ({file_size / (1024*1024*1024):.2f} GB)")
+                
+                # Sanitize filename for better compatibility
+                sanitized_name = sanitize_filename(file_name)
+                if sanitized_name != file_name:
+                    sanitized_path = os.path.join(os.path.dirname(file_path), sanitized_name)
+                    try:
+                        os.rename(file_path, sanitized_path)
+                        file_path = sanitized_path
+                        file_name = sanitized_name
+                        print(f"Renamed file to: {sanitized_name}")
+                    except Exception as rename_error:
+                        print(f"Failed to rename file: {rename_error}")
+                
+                # First upload to user with spoiler (for videos)
+                print(f"Starting upload for: {file_name}")
+                user_messages = await upload_to_user_first(client, message, file_path, progress_tracker)
+                
+                if user_messages:
+                    print(f"Successfully uploaded: {file_name}")
                     
-                    # Calculate speed
-                    elapsed_time = time.time() - progress_tracker.start_time
-                    if elapsed_time > 0:
-                        progress_tracker.speed = downloaded / elapsed_time
+                    # Handle both single message and list of messages
+                    if not isinstance(user_messages, list):
+                        user_messages = [user_messages]
+                    
+                    # Copy ALL messages to dump channels
+                    try:
+                        for user_message in user_messages:
+                            # Get the actual file size from the message
+                            msg_file_size = 0
+                            msg_file_name = ""
+                            
+                            if user_message.video:
+                                msg_file_size = user_message.video.file_size
+                                msg_file_name = user_message.video.file_name or file_name
+                            elif user_message.audio:
+                                msg_file_size = user_message.audio.file_size
+                                msg_file_name = user_message.audio.file_name or file_name
+                            elif user_message.document:
+                                msg_file_size = user_message.document.file_size
+                                msg_file_name = user_message.document.file_name or file_name
+                            else:
+                                msg_file_size = file_size
+                                msg_file_name = file_name
+                            
+                            await copy_to_dumps(client, user_message, msg_file_name, msg_file_size, user_info)
+                            print(f"Successfully copied to dump channels: {msg_file_name}")
+                            
+                    except Exception as dump_error:
+                        print(f"Failed to copy to dump channels: {dump_error}")
+                        # Don't fail the whole process if dump copying fails
+                    
+                    uploaded_successfully = True
+                    total_file_size += file_size
+                    uploaded_files.append({
+                        'name': file_name,
+                        'size': file_size,
+                        'path': file_path
+                    })
+                else:
+                    print(f"Failed to upload: {file_name}")
+                    await message.reply_text(
+                        f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ ᴜᴘʟᴏᴀᴅ:</b> {os.path.basename(file_path)[:50]}{'...' if len(os.path.basename(file_path)) > 50 else ''}",
+                        parse_mode=ParseMode.HTML
+                    )
+                
+            except Exception as file_error:
+                print(f"Error processing file {file_path}: {file_error}")
+                await message.reply_text(
+                    f"<b>❌ ғᴀɪʟᴇᴅ ᴛᴏ sᴇɴᴅ:</b> {os.path.basename(file_path)[:50]}{'...' if len(os.path.basename(file_path)) > 50 else ''}\n"
+                    f"<b>ᴇʀʀᴏʀ:</b> <code>{str(file_error)[:100]}</code>",
+                    parse_mode=ParseMode.HTML
+                )
         
-        progress_tracker.status = "ᴄᴏᴍᴘʟᴇᴛᴇᴅ"
-        print(f"Successfully downloaded Google Drive file: {filename}")
-        return True
+        # Update database stats after successful uploads
+        if uploaded_successfully and total_file_size > 0:
+            try:
+                site_domain = extract_domain(url)
+                username = message.from_user.first_name or message.from_user.username or "Unknown"
+                
+                file_ext = os.path.splitext(uploaded_files[0]['name'])[1].lower()
+                if file_ext in ['.mp4', '.mkv', '.avi', '.mov', '.webm']:
+                    file_type = 'video'
+                elif file_ext in ['.mp3', '.m4a', '.wav', '.flac', '.ogg']:
+                    file_type = 'audio'
+                else:
+                    file_type = 'document'
+                
+                success = await update_download_stats(user_id, username, url, total_file_size, file_type)
+                print(f"Database stats updated: {success}")
+
+            except Exception as db_error:
+                print(f"Database update error: {db_error}")
+                pass
+        
+        # Delete the status message after everything is done
+        if uploaded_successfully:
+            try:
+                await status_msg.delete()
+                await message.delete()
+            except Exception:
+                await status_msg.edit_text(
+                    "<b>✅ ᴀʟʟ ᴅᴏɴᴇ!</b>",
+                    parse_mode=ParseMode.HTML
+                )
+        else:
+            await status_msg.edit_text(
+                "<b>❌ ɴᴏ ғɪʟᴇs ᴜᴘʟᴏᴀᴅᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!</b>",
+                parse_mode=ParseMode.HTML
+            )
         
     except Exception as e:
-        print(f"Error downloading Google Drive file: {e}")
-        progress_tracker.status = f"ᴇʀʀᴏʀ: {str(e)}"
-        return False
+        print(f"Main download_and_send_concurrent error: {e}")
+        await status_msg.edit_text(
+            f"<b>❌ ᴇʀʀᴏʀ:</b> {str(e)[:200]}{'...' if len(str(e)) > 200 else ''}",
+            parse_mode=ParseMode.HTML
+        )
+    
+    finally:
+        cleanup_files(download_dir)
+        # Remove from active downloads
+        if user_id in active_downloads:
+            active_downloads[user_id] = [t for t in active_downloads[user_id] if t.download_id != download_id]
+            if not active_downloads[user_id]:
+                del active_downloads[user_id]
 
 # ==================== UPLOAD TO USER FIRST ====================
 
