@@ -13,8 +13,8 @@ class Config:
     
     API_ID: int = 21145186
     API_HASH: str = "daa53f4216112ad22b8a8f6299936a46"
-    BOT_TOKEN: str = "7222800322:AAG2aUxnzv4cvuznoxsgiJPIW-OCR9Z8MaE"
-    BOT_USERNAME: str = "cornhubxrobot"
+    BOT_TOKEN: str = "8295156833:AAE9xBchmehh8VROelTm0K6I3ZHBF3mwems"
+    BOT_USERNAME: str = "getcornbot"
     BOT_NAME: str = "VɪᴅXᴛʀᴀᴄᴛᴏʀ"
     
     # User session for faster uploads (optional)
@@ -28,14 +28,14 @@ class Config:
     # ═══════════════════════════════════════════════════════════════
     
     DB_URL: str = "mongodb+srv://ronaksaini922:NbeuC9FX8baih72p@cluster0.z6bb3.mongodb.net/cornhub?retryWrites=true&w=majority"
-    DB_NAME: str = "cornhub-new"
-    DATABASE_NAME: str = "cornhub-new"  # Alias for compatibility
+    DB_NAME: str = "cornhub-new1"
+    DATABASE_NAME: str = "cornhub-new1"  # Alias for compatibility
     
     # ═══════════════════════════════════════════════════════════════
     #                    ADMIN CONFIGURATION
     # ═══════════════════════════════════════════════════════════════
     
-    OWNER_ID: int = int(os.environ.get("OWNER_ID", "6109922417"))
+    OWNER_ID: int = int(os.environ.get("OWNER_ID", "7858013624"))
     OWNER_TAG: str = os.environ.get("OWNER_TAG", "mrxbotx")
     
     # Parse admin list from environment
@@ -43,7 +43,7 @@ class Config:
     ADMINS: List[int] = [int(admin) for admin in ADMIN_LIST if admin.isdigit()]
     ADMINS.append(OWNER_ID)  # Always include owner
     
-    ADMIN_USERS: List[int] = [6109922417]  # Primary admin users
+    ADMIN_USERS: List[int] = [7858013624]  # Primary admin users
     
     # ═══════════════════════════════════════════════════════════════
     #                    DOWNLOAD CONFIGURATION
@@ -65,7 +65,7 @@ class Config:
     #                    DUMP CHANNELS
     # ═══════════════════════════════════════════════════════════════
     
-    DUMP_CHAT_IDS: List[int] = [-1002808185307]
+    DUMP_CHAT_IDS: List[int] = [-1002512551303]
     
     # ═══════════════════════════════════════════════════════════════
     #                    AUTHORIZATION
