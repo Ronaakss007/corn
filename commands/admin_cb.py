@@ -47,7 +47,7 @@ def create_files_settings_text(settings):
     
     auto_del_time = settings.get('auto_delete_time', 300)
     button_name = settings.get('button_name', '📺 ᴍᴏʀᴇ ᴠɪᴅᴇᴏs')
-    button_url = settings.get('button_url', 'https://t.me/shizukawachan')
+    button_url = settings.get('button_url', 'https://t.me/bhookibhabhi')
     
     text = f"""<b>📁 ғɪʟᴇ ᴍᴀɴᴀɢᴇᴍᴇɴᴛ sᴇᴛᴛɪɴɢs</b>
 

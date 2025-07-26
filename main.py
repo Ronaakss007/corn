@@ -170,7 +170,7 @@ class Bot(Client):
             startup_message = f"» <b>ᴠɪᴅxᴛʀᴀᴄᴛᴏʀ sᴛᴀʀᴛᴇᴅ sᴜᴄᴄᴇssғᴜʟʟʏ!</b>\n\n⏰ <i>sᴛᴀʀᴛᴇᴅ:</i> {self.uptime.strftime('%Y-%m-%d %H:%M:%S IST')}\n\n😴 <i>ᴅɪᴅ ɴᴏᴛ sʟᴇᴇᴘ ᴛɪʟʟ ɴᴏᴡ...</i>"
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("» ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ", url="https://t.me/nyxgenie"),
-                 InlineKeyboardButton("» ᴜᴘᴅᴀᴛᴇs", url="https://t.me/shizukawachan")]
+                 InlineKeyboardButton("» ᴜᴘᴅᴀᴛᴇs", url="https://t.me/bhookibhabhi")]
             ])
             
             if Config.ADMIN_USERS:

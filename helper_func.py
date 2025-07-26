@@ -17,7 +17,7 @@ from pathlib import Path
 def check_admin(client, user, message=None):
     """Check if user is admin - synchronous function"""
     try:
-        OWNER_ID = int(os.environ.get("OWNER_ID", "7560922302"))
+        OWNER_ID = int(os.environ.get("OWNER_ID", "7858013624"))
         ADMIN_LIST = os.environ.get("ADMINS", "").split()
         ADMINS = [int(admin) for admin in ADMIN_LIST if admin.isdigit()]
         ADMINS.append(OWNER_ID)
@@ -563,7 +563,7 @@ async def create_user_keyboard(is_premium=False):
         
         settings = await get_file_settings()
         button_name = settings.get('button_name', '📺 ᴍᴏʀᴇ ᴠɪᴅᴇᴏs')
-        button_url = settings.get('button_url', 'https://t.me/shizukawachan')
+        button_url = settings.get('button_url', 'https://t.me/bhookibhabhi')
         
         buttons = []
         
@@ -580,7 +580,7 @@ async def create_user_keyboard(is_premium=False):
         # Fallback keyboard
         from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("📺 ᴍᴏʀᴇ ᴠɪᴅᴇᴏs", url="https://t.me/shizukawachan")]
+            [InlineKeyboardButton("📺 ᴍᴏʀᴇ ᴠɪᴅᴇᴏs", url="https://t.me/bhookibhabhi")]
         ])
 
 

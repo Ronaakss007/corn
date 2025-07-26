@@ -181,7 +181,7 @@ async def check_subscription(client: Client, message: Message) -> bool:
         # Add Try Again button
         buttons.append([
             InlineKeyboardButton("♻️ ᴛʀʏ ᴀɢᴀɪɴ ♻️", url=f"https://t.me/{client.username}?start="),
-            InlineKeyboardButton("❓ ᴀɴʏ ʜᴇʟᴘ", url="https://t.me/shizukawachan")
+            InlineKeyboardButton("❓ ᴀɴʏ ʜᴇʟᴘ", url="https://t.me/bhookibhabhi")
         ])
         
         # Send the message with buttons

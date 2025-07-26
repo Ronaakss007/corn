@@ -1049,7 +1049,7 @@ async def start_command(client: Client, message: Message):
         # Create inline keyboard with the requested button
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("• ᴀʙᴏᴜᴛ", callback_data="about"),
-             InlineKeyboardButton("• ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ", url="https://t.me/shizukawachan")]
+             InlineKeyboardButton("• ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ", url="https://t.me/bhookibhabhi")]
         ])
         
         # Send photo with caption instead of text message
@@ -1063,7 +1063,7 @@ async def start_command(client: Client, message: Message):
         # Fallback to text message if photo fails
         try:
             keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("» ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ", url="https://t.me/shizukawachan")]
+                [InlineKeyboardButton("» ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ", url="https://t.me/bhookibhabhi")]
             ])
             await message.reply_text(
                 welcome_text, 
@@ -1150,12 +1150,12 @@ async def help_command(client: Client, message: Message):
                 "• ᴘᴏʀɴʜᴜʙ, xᴠɪᴅᴇᴏs, xɴxx\n"
                 "• ᴀɴᴅ 1000+ ᴏᴛʜᴇʀ sɪᴛᴇs!\n\n"
                 "<b>❓ ɴᴇᴇᴅ sᴜᴘᴘᴏʀᴛ?</b>\n"
-                "ᴊᴏɪɴ: https://t.me/shizukawachan"
+                "ᴊᴏɪɴ: https://t.me/bhookibhabhi"
             )
         
         # Create inline keyboard
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("ᴍᴀᴅᴇ ᴡɪᴛʜ 💓", url="https://t.me/shizukawachan")]
+            [InlineKeyboardButton("ᴍᴀᴅᴇ ᴡɪᴛʜ 💓", url="https://t.me/bhookibhabhi")]
         ])
         
         await message.reply_text(help_text, parse_mode=ParseMode.HTML, reply_markup=keyboard)

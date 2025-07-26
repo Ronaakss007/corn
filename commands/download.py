@@ -4,14 +4,13 @@ import re
 import time
 import asyncio
 import yt_dlp
-import aiohttp
-import aiofiles
 import json
 import logging
+import subprocess
 from datetime import datetime
 from collections import defaultdict, Counter
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.enums import ParseMode
 from config import Config
 from pyrogram import Client
@@ -38,6 +37,9 @@ DUMP_CHAT_IDS = Config.DUMP_CHAT_IDS
 # Global variables to track downloads - Support multiple downloads per user
 active_downloads = {}  # user_id: [list of ProgressTracker objects]
 MAX_CONCURRENT_DOWNLOADS = 10  # Maximum concurrent downloads per user
+
+# Quality selection storage
+quality_selections = {}  # user_id: {'url': str, 'formats': list, 'message': Message}
 
 class ProgressTracker:
     def __init__(self, url, download_id):
@@ -160,17 +162,32 @@ async def handle_url_message(client: Client, message: Message):
         progress_tracker = ProgressTracker(url, download_id)
         active_downloads[user_id].append(progress_tracker)
         
-        # Create status message
-        status_msg = await message.reply_text("<b>›› ɪɴɪᴛɪᴀʟɪᴢɪɴɢ...</b>", parse_mode=ParseMode.HTML)
-        progress_tracker.status_msg = status_msg
+        # Show quality selection first
+        status_msg = await message.reply_text("<b>›› ɢᴇᴛᴛɪɴɢ ᴀᴠᴀɪʟᴀʙʟᴇ ǫᴜᴀʟɪᴛɪᴇs...</b>", parse_mode=ParseMode.HTML)
         
-        # Extract metadata
-        metadata = await get_video_metadata(url)
-        if metadata:
-            progress_tracker.metadata = metadata
+        # Get available formats
+        formats = await get_available_formats(url)
+        if not formats:
+            await status_msg.edit_text(
+                "<b>❌ ᴄᴏᴜʟᴅ ɴᴏᴛ ғᴇᴛᴄʜ ᴀᴠᴀɪʟᴀʙʟᴇ ǫᴜᴀʟɪᴛɪᴇs</b>\n\n"
+                "ᴜsɪɴɢ ᴅᴇғᴀᴜʟᴛ ǫᴜᴀʟɪᴛʏ...",
+                parse_mode=ParseMode.HTML
+            )
+            progress_tracker.status_msg = status_msg
+            asyncio.create_task(download_and_send_concurrent(client, message, progress_tracker, user_id, selected_format=None))
+            return
         
-        # Start download in background
-        asyncio.create_task(download_and_send_concurrent(client, message, progress_tracker, user_id))
+        # Store quality selection data
+        quality_selections[user_id] = {
+            'url': url,
+            'formats': formats,
+            'message': message,
+            'progress_tracker': progress_tracker,
+            'download_id': download_id
+        }
+        
+        # Show quality selection keyboard
+        await show_quality_selection(status_msg, formats, user_id)
         
     except Exception as e:
         await message.reply_text(
@@ -185,7 +202,7 @@ async def handle_url_message(client: Client, message: Message):
 
 # ==================== CONCURRENT DOWNLOAD AND SEND ====================
 
-async def download_and_send_concurrent(client, message, progress_tracker, user_id):
+async def download_and_send_concurrent(client, message, progress_tracker, user_id, selected_format=None):
     """Download video and send to user with concurrent support"""
     download_id = progress_tracker.download_id
     url = progress_tracker.url
@@ -213,35 +230,20 @@ async def download_and_send_concurrent(client, message, progress_tracker, user_i
                 print(f"Progress hook error: {e}")
                 pass
         
-        # Configure yt-dlp options
-        try:
-            ydl_opts = get_download_options(url)
-            ydl_opts.update({
-                'outtmpl': f'{download_dir}%(title)s.%(ext)s',
-                'progress_hooks': [progress_hook],
-            })
-            print(f"Configured yt-dlp options for URL: {url}")
-        except Exception as opts_error:
-            print(f"Error configuring yt-dlp options: {opts_error}")
-            await status_msg.edit_text(
-                f"<b>❌ ᴄᴏɴғɪɢᴜʀᴀᴛɪᴏɴ ᴇʀʀᴏʀ</b>\n\n"
-                f"<b>🔗 ᴜʀʟ:</b> <code>{url[:100]}{'...' if len(url) > 100 else ''}</code>\n"
-                f"<b>❌ ᴇʀʀᴏʀ:</b> <code>{str(opts_error)}</code>",
-                parse_mode=ParseMode.HTML
-            )
-            return
-        
         # Start progress update task
         progress_task = asyncio.create_task(update_progress_concurrent(progress_tracker))
         
-        # Download in a separate thread
+        # Download using aria2 instead of yt-dlp
         try:
-            print(f"Starting download for URL: {url}")
-            loop = asyncio.get_event_loop()
-            success = await loop.run_in_executor(None, download_video, url, ydl_opts)
-            print(f"Download completed. Success: {success}")
+            print(f"Starting aria2 download for URL: {url}")
+            if selected_format:
+                print(f"Using selected format: {selected_format['quality']} ({selected_format['format_id']})")
+            
+            success = await download_with_aria2(url, download_dir, progress_tracker, selected_format)
+            print(f"Aria2 download completed. Success: {success}")
+            
         except Exception as download_error:
-            print(f"Download execution error: {download_error}")
+            print(f"Aria2 download execution error: {download_error}")
             success = False
         
         # Cancel progress updates
@@ -1197,4 +1199,217 @@ async def cleanup_on_startup():
 # Initialize cleanup on module load
 asyncio.create_task(cleanup_on_startup())
 
-print("✅ Enhanced download module loaded successfully with concurrent support")
+# ==================== QUALITY SELECTION FUNCTIONS ====================
+
+async def get_available_formats(url):
+    """Get available video formats from yt-dlp"""
+    try:
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'listformats': True,
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            
+            if not info or 'formats' not in info:
+                return []
+            
+            formats = []
+            added_qualities = set()
+            
+            for f in info['formats']:
+                if f.get('vcodec') != 'none' and f.get('height'):  # Video formats only
+                    height = f.get('height')
+                    ext = f.get('ext', 'mp4')
+                    filesize = f.get('filesize') or f.get('filesize_approx')
+                    format_id = f.get('format_id', '')
+                    
+                    quality_label = f"{height}p"
+                    if quality_label not in added_qualities:
+                        formats.append({
+                            'format_id': format_id,
+                            'quality': quality_label,
+                            'height': height,
+                            'ext': ext,
+                            'filesize': filesize,
+                            'url': f.get('url', ''),
+                            'full_format': f
+                        })
+                        added_qualities.add(quality_label)
+            
+            # Sort by quality (highest first)
+            formats.sort(key=lambda x: x['height'], reverse=True)
+            return formats[:6]  # Limit to top 6 qualities
+            
+    except Exception as e:
+        print(f"Error getting formats: {e}")
+        return []
+
+async def show_quality_selection(status_msg, formats, user_id):
+    """Show quality selection inline keyboard"""
+    try:
+        if not formats:
+            await status_msg.edit_text(
+                "<b>❌ ɴᴏ ǫᴜᴀʟɪᴛɪᴇs ᴀᴠᴀɪʟᴀʙʟᴇ</b>\n\n"
+                "ᴜsɪɴɢ ᴅᴇғᴀᴜʟᴛ ǫᴜᴀʟɪᴛʏ...",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        
+        text = "<b>🎬 sᴇʟᴇᴄᴛ ᴠɪᴅᴇᴏ ǫᴜᴀʟɪᴛʏ</b>\n\n"
+        text += "ᴄʜᴏᴏsᴇ ʏᴏᴜʀ ᴘʀᴇғᴇʀʀᴇᴅ ᴠɪᴅᴇᴏ ǫᴜᴀʟɪᴛʏ:\n\n"
+        
+        keyboard = []
+        for i, fmt in enumerate(formats):
+            size_text = ""
+            if fmt['filesize']:
+                size_text = f" • {format_bytes(fmt['filesize'])}"
+            
+            button_text = f"📺 {fmt['quality']}{size_text}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"quality_{user_id}_{i}")])
+        
+        # Add best quality option
+        keyboard.append([InlineKeyboardButton("⭐ ʙᴇsᴛ ᴀᴠᴀɪʟᴀʙʟᴇ", callback_data=f"quality_{user_id}_best")])
+        
+        await status_msg.edit_text(
+            text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+    except Exception as e:
+        print(f"Error showing quality selection: {e}")
+
+@Client.on_callback_query(filters.regex(r"^quality_"))
+async def handle_quality_selection(client: Client, callback_query: CallbackQuery):
+    """Handle quality selection callback"""
+    try:
+        data = callback_query.data.split("_")
+        if len(data) < 3:
+            return
+        
+        user_id = int(data[1])
+        quality_index = data[2]
+        
+        # Check if user has pending quality selection
+        if user_id not in quality_selections:
+            await callback_query.answer("⚠️ sᴇʟᴇᴄᴛɪᴏɴ ᴇxᴘɪʀᴇᴅ", show_alert=True)
+            return
+        
+        # Check if callback is from the correct user
+        if callback_query.from_user.id != user_id:
+            await callback_query.answer("⚠️ ɴᴏᴛ ʏᴏᴜʀ sᴇʟᴇᴄᴛɪᴏɴ", show_alert=True)
+            return
+        
+        selection_data = quality_selections[user_id]
+        formats = selection_data['formats']
+        progress_tracker = selection_data['progress_tracker']
+        message = selection_data['message']
+        
+        selected_format = None
+        if quality_index == "best":
+            selected_format = formats[0] if formats else None
+            quality_text = "ʙᴇsᴛ ᴀᴠᴀɪʟᴀʙʟᴇ"
+        else:
+            try:
+                index = int(quality_index)
+                if 0 <= index < len(formats):
+                    selected_format = formats[index]
+                    quality_text = selected_format['quality']
+                else:
+                    await callback_query.answer("❌ ɪɴᴠᴀʟɪᴅ sᴇʟᴇᴄᴛɪᴏɴ", show_alert=True)
+                    return
+            except ValueError:
+                await callback_query.answer("❌ ɪɴᴠᴀʟɪᴅ sᴇʟᴇᴄᴛɪᴏɴ", show_alert=True)
+                return
+        
+        # Update message to show selected quality
+        await callback_query.message.edit_text(
+            f"<b>✅ ǫᴜᴀʟɪᴛʏ sᴇʟᴇᴄᴛᴇᴅ: {quality_text}</b>\n\n"
+            "<b>›› sᴛᴀʀᴛɪɴɢ ᴅᴏᴡɴʟᴏᴀᴅ...</b>",
+            parse_mode=ParseMode.HTML
+        )
+        
+        progress_tracker.status_msg = callback_query.message
+        
+        # Clean up quality selection data
+        del quality_selections[user_id]
+        
+        # Start download with selected format
+        asyncio.create_task(download_and_send_concurrent(client, message, progress_tracker, user_id, selected_format))
+        
+        await callback_query.answer()
+        
+    except Exception as e:
+        print(f"Error handling quality selection: {e}")
+        await callback_query.answer("❌ ᴇʀʀᴏʀ ᴘʀᴏᴄᴇssɪɴɢ sᴇʟᴇᴄᴛɪᴏɴ", show_alert=True)
+
+async def download_with_aria2(url, output_path, progress_tracker, selected_format=None):
+    """Download using aria2c instead of yt-dlp direct download"""
+    try:
+        if not selected_format or not selected_format.get('url'):
+            # Fallback to yt-dlp for URL extraction
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'format': 'best[height<=720]/best' if not selected_format else f"{selected_format['format_id']}"
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if info and 'url' in info:
+                    download_url = info['url']
+                    filename = info.get('title', 'video') + '.' + info.get('ext', 'mp4')
+                else:
+                    return False
+        else:
+            download_url = selected_format['url']
+            filename = f"video_{selected_format['quality']}.{selected_format['ext']}"
+        
+        # Sanitize filename
+        filename = sanitize_filename(filename)
+        full_output_path = os.path.join(output_path, filename)
+        
+        # Aria2 command
+        aria2_cmd = [
+            'aria2c',
+            '--continue=true',
+            '--max-connection-per-server=8',
+            '--min-split-size=1M',
+            '--split=8',
+            '--max-download-limit=0',
+            '--file-allocation=none',
+            '--allow-overwrite=true',
+            '--auto-file-renaming=false',
+            f'--dir={output_path}',
+            f'--out={filename}',
+            download_url
+        ]
+        
+        # Run aria2c
+        process = await asyncio.create_subprocess_exec(
+            *aria2_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        progress_tracker.filename = full_output_path
+        progress_tracker.status = "ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ"
+        
+        # Wait for completion
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode == 0 and os.path.exists(full_output_path):
+            progress_tracker.status = "ᴄᴏᴍᴘʟᴇᴛᴇᴅ"
+            return True
+        else:
+            print(f"Aria2 error: {stderr.decode()}")
+            return False
+            
+    except Exception as e:
+        print(f"Error in aria2 download: {e}")
+        return False
+
+print("✅ Enhanced download module loaded successfully with concurrent support and quality selection")

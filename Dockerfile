@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     curl \
     git \
+    aria2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching

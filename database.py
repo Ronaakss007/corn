@@ -61,7 +61,7 @@ async def get_file_settings():
                 'spoiler_enabled': True,
                 'inline_buttons': True,
                 'button_name': '📺 ᴍᴏʀᴇ ᴠɪᴅᴇᴏs',
-                'button_url': 'https://t.me/shizukawachan',
+                'button_url': 'https://t.me/bhookibhabhi',
                 'created_at': datetime.now()
             }
             await settings_data.insert_one(default_settings)
@@ -77,7 +77,7 @@ async def get_file_settings():
             'inline_buttons': True,
             'spoiler_enabled': True,
             'button_name': '📺 ᴍᴏʀᴇ ᴠɪᴅᴇᴏs',
-            'button_url': 'https://t.me/shizukawachan'
+            'button_url': 'https://t.me/bhookibhabhi'
         }
 
 async def update_file_setting(key, value):
