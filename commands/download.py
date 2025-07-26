@@ -1267,7 +1267,7 @@ async def show_quality_selection(status_msg, formats, user_id):
             if fmt['filesize']:
                 size_text = f" • {format_bytes(fmt['filesize'])}"
             
-            button_text = f"📺 {fmt['quality']}{size_text}"
+            button_text = f"💋 {fmt['quality']}{size_text}"
             keyboard.append([InlineKeyboardButton(button_text, callback_data=f"quality_{user_id}_{i}")])
         
         # Add best quality option
@@ -1349,44 +1349,76 @@ async def handle_quality_selection(client: Client, callback_query: CallbackQuery
 async def download_with_aria2(url, output_path, progress_tracker, selected_format=None):
     """Download using aria2c instead of yt-dlp direct download"""
     try:
-        if not selected_format or not selected_format.get('url'):
-            # Fallback to yt-dlp for URL extraction
-            ydl_opts = {
-                'quiet': True,
-                'no_warnings': True,
-                'format': 'best[height<=720]/best' if not selected_format else f"{selected_format['format_id']}"
-            }
+        # Always use yt-dlp to extract the actual download URL
+        format_selector = 'best[height<=720]/best'
+        if selected_format and selected_format.get('format_id'):
+            format_selector = selected_format['format_id']
+        
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'format': format_selector,
+            'no_check_certificate': True,
+        }
+        
+        print(f"Extracting download URL with format: {format_selector}")
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                print("No video info extracted")
+                return False
             
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if info and 'url' in info:
-                    download_url = info['url']
-                    filename = info.get('title', 'video') + '.' + info.get('ext', 'mp4')
-                else:
-                    return False
-        else:
-            download_url = selected_format['url']
-            filename = f"video_{selected_format['quality']}.{selected_format['ext']}"
+            # Get the direct download URL
+            if 'url' in info:
+                download_url = info['url']
+            elif 'formats' in info and info['formats']:
+                # Get the selected format URL
+                download_url = info['formats'][-1].get('url')
+            else:
+                print("No download URL found in video info")
+                return False
+            
+            if not download_url:
+                print("Download URL is empty")
+                return False
+            
+            # Generate filename
+            title = info.get('title', 'video')
+            ext = info.get('ext', 'mp4')
+            filename = f"{title}.{ext}"
+        
+        print(f"Extracted download URL: {download_url[:100]}...")
         
         # Sanitize filename
         filename = sanitize_filename(filename)
         full_output_path = os.path.join(output_path, filename)
         
-        # Aria2 command
+        # Aria2 command with more robust settings
         aria2_cmd = [
             'aria2c',
             '--continue=true',
-            '--max-connection-per-server=8',
+            '--max-connection-per-server=4',  # Reduced connections for stability
             '--min-split-size=1M',
-            '--split=8',
+            '--split=4',  # Reduced splits
             '--max-download-limit=0',
             '--file-allocation=none',
             '--allow-overwrite=true',
             '--auto-file-renaming=false',
+            '--max-tries=5',
+            '--retry-wait=3',
+            '--timeout=30',
+            '--connect-timeout=10',
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            '--header=Accept: */*',
+            '--header=Accept-Language: en-US,en;q=0.9',
+            '--check-certificate=false',
             f'--dir={output_path}',
             f'--out={filename}',
             download_url
         ]
+        
+        print(f"Running aria2c command: aria2c --out={filename} [URL]")
         
         # Run aria2c
         process = await asyncio.create_subprocess_exec(
@@ -1401,15 +1433,58 @@ async def download_with_aria2(url, output_path, progress_tracker, selected_forma
         # Wait for completion
         stdout, stderr = await process.communicate()
         
+        print(f"Aria2 return code: {process.returncode}")
+        if stderr:
+            print(f"Aria2 stderr: {stderr.decode()}")
+        if stdout:
+            print(f"Aria2 stdout: {stdout.decode()}")
+        
         if process.returncode == 0 and os.path.exists(full_output_path):
             progress_tracker.status = "ᴄᴏᴍᴘʟᴇᴛᴇᴅ"
             return True
         else:
-            print(f"Aria2 error: {stderr.decode()}")
-            return False
+            # Fallback to yt-dlp if aria2 fails
+            print("Aria2 failed, falling back to yt-dlp download")
+            return await fallback_ytdlp_download(url, output_path, progress_tracker, format_selector)
             
     except Exception as e:
         print(f"Error in aria2 download: {e}")
+        # Fallback to yt-dlp if aria2 fails
+        return await fallback_ytdlp_download(url, output_path, progress_tracker, 'best[height<=720]/best')
+
+async def fallback_ytdlp_download(url, output_path, progress_tracker, format_selector):
+    """Fallback to yt-dlp download if aria2 fails"""
+    try:
+        print("Using yt-dlp fallback download")
+        
+        def progress_hook(d):
+            try:
+                if d['status'] == 'downloading':
+                    progress_tracker.downloaded = d.get('downloaded_bytes', 0)
+                    progress_tracker.total_size = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
+                    progress_tracker.speed = d.get('speed', 0) or 0
+                    progress_tracker.eta = d.get('eta', 0) or 0
+                    progress_tracker.filename = d.get('filename', 'Unknown')
+                    progress_tracker.status = "ᴅᴏᴡɴʟᴏᴀᴅɪɴɢ"
+                elif d['status'] == 'finished':
+                    progress_tracker.status = "ᴄᴏᴍᴘʟᴇᴛᴇᴅ"
+                    progress_tracker.filename = d.get('filename', 'Unknown')
+            except Exception as e:
+                print(f"Progress hook error: {e}")
+        
+        ydl_opts = {
+            'format': format_selector,
+            'outtmpl': f'{output_path}%(title)s.%(ext)s',
+            'progress_hooks': [progress_hook],
+            'no_check_certificate': True,
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+            return True
+            
+    except Exception as e:
+        print(f"Fallback yt-dlp download error: {e}")
         return False
 
 print("✅ Enhanced download module loaded successfully with concurrent support and quality selection")
