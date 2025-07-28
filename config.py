@@ -11,9 +11,9 @@ class Config:
     #                    TELEGRAM API CONFIGURATION
     # ═══════════════════════════════════════════════════════════════
     
-    API_ID: int = 21145186
-    API_HASH: str = "daa53f4216112ad22b8a8f6299936a46"
-    BOT_TOKEN: str = "8295156833:AAE9xBchmehh8VROelTm0K6I3ZHBF3mwems"
+    API_ID: int = 22505271
+    API_HASH: str = "c89a94fcfda4bc06524d0903977fc81e"
+    BOT_TOKEN: str = "8209730035:AAFBZ9rHiDFBZVt1cshRw-OS4whz4-sQ090"
     BOT_USERNAME: str = "getcornbot"
     BOT_NAME: str = "VɪᴅXᴛʀᴀᴄᴛᴏʀ"
     
