@@ -13,7 +13,7 @@ class Config:
     
     API_ID: int = 22505271
     API_HASH: str = "c89a94fcfda4bc06524d0903977fc81e"
-    BOT_TOKEN: str = "8209730035:AAFBZ9rHiDFBZVt1cshRw-OS4whz4-sQ090"
+    BOT_TOKEN: str = "8427974914:AAF7807RmCuY-oAtXA3QHpoR-zCYC0uYPtk"
     BOT_USERNAME: str = "getcornbot"
     BOT_NAME: str = "VɪᴅXᴛʀᴀᴄᴛᴏʀ"
     
@@ -35,7 +35,7 @@ class Config:
     #                    ADMIN CONFIGURATION
     # ═══════════════════════════════════════════════════════════════
     
-    OWNER_ID: int = int(os.environ.get("OWNER_ID", "7858013624"))
+    OWNER_ID: int = int(os.environ.get("OWNER_ID", "7819896156"))
     OWNER_TAG: str = os.environ.get("OWNER_TAG", "mrxbotx")
     
     # Parse admin list from environment
@@ -43,7 +43,7 @@ class Config:
     ADMINS: List[int] = [int(admin) for admin in ADMIN_LIST if admin.isdigit()]
     ADMINS.append(OWNER_ID)  # Always include owner
     
-    ADMIN_USERS: List[int] = [7858013624]  # Primary admin users
+    ADMIN_USERS: List[int] = [7819896156]  # Primary admin users
     
     # ═══════════════════════════════════════════════════════════════
     #                    DOWNLOAD CONFIGURATION
