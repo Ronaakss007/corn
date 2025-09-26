@@ -996,8 +996,7 @@ def download_video(url, ydl_opts):
                 'cookiefile': None,  # We'll use cookies string instead
                 'http_headers': {
                     **speed_opts.get('http_headers', {}),
-                    'Cookie': 'ig_did=5F30EC1A-E526-4D97-B373-19788410E2CE; csrftoken=ycZ7eUDnykKtR8upEyrek5; datr=66fOZ5Qiu1l_cU4uP2cKjA69; mid=Z_zyYwALAAG7Oecyackg3FnHYIbK; ds_user_id=53761245194; ps_l=1; ps_n=1; sessionid=53761245194%3Aiuj8gwGXuvt5z5%3A26%3AAYdoBvwXYdn8FhG6dPUPV2TNN5oHTYLIjDfFerlypw; dpr=1.25; wd=775x735; rur="HIL\05453761245194\0541781864652:01fef3e329bbcd4bb1db01afb346ef2a68726a2965cab4061f3f388195412625b8f76154"',
-                    'Origin': 'https://www.instagram.com',
+                    'Cookie': "csrftoken=ycZ7eUDnykKtR8upEyrek5; datr=iv3VaBRIp-ugeEhyQd1-pYFy; dpr=1.25; ds_user_id=76600774129; ig_did=D1D96F50-94A2-48C3-9D07-A420ECB20A3A; mid=Z_zyYwALAAG7Oecyackg3FnHYIbK; ps_l=1; ps_n=1; rur=\"EAG\\05476600774129\\0541790390723:01fed5a2c06d4de129daec03187c4e490a25beb3f70892cd63d48d48e313be7eee046e12\"; sessionid=76600774129%3ArEyfPBvwn95H4U%3A27%3AAYh4vc4RGGGjTDntF0Iy-CGPLWdc_wVER4K7KfitZA; wd=786x735",
                     'Referer': 'https://www.instagram.com/',
                     'X-Requested-With': 'XMLHttpRequest',
                     'X-CSRFToken': 'ycZ7eUDnykKtR8upEyrek5',

@@ -1332,3 +1332,37 @@ async def cleanup_files(client, message):
         await message.reply_text(f"🧹 Cleaned up {count} files in your download folder.")
     except Exception as e:
         await message.reply_text(f"❌ Failed to clean up files:\n`{e}`")
+
+from moviepy.editor import VideoFileClip
+
+@Client.on_message(filters.command("extract") & filters.reply)
+async def extract_audio_from_video(client: Client, message: Message):
+    reply = message.reply_to_message
+
+    if not reply.video:
+        return await message.reply_text("⚠️ Please reply to a video to extract audio.")
+
+    processing = await message.reply_text("🎵 Exᴛʀᴀᴄᴛɪɴɢ ᴀᴜᴅɪᴏ... Pʟᴇᴀsᴇ ᴡᴀɪᴛ.")
+
+    try:
+        # Download video
+        video_path = await reply.download()
+        audio_path = os.path.splitext(video_path)[0] + ".mp3"
+
+        # Extract audio using moviepy
+        clip = VideoFileClip(video_path)
+        clip.audio.write_audiofile(audio_path)
+        clip.close()
+
+        # Send extracted audio back to user
+        await message.reply_audio(audio_path,performer="ʙʜᴏᴏᴋɪʙʜᴀʙʜɪ")
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {e}")
+    finally:
+        await processing.delete()
+        # Clean up downloaded files
+        try:
+            os.remove(video_path)
+            os.remove(audio_path)
+        except:
+            pass
