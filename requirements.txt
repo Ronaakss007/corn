@@ -19,3 +19,4 @@ aiohttp>=3.9.1
 validators>=0.22.0
 browser-cookie3>=0.19.1
 gallery-dl>=1.26.0
+bs4>=4.12.2
