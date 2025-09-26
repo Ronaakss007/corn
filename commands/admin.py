@@ -1370,7 +1370,7 @@ async def extract_audio_from_video(client: Client, message: Message):
         await message.reply_audio(
             audio_path,
             performer="ʙʜᴏᴏᴋɪʙʜᴀʙʜɪ",
-            title=os.path.basename(audio_path),
+            title=None,
             thumb=thumb_path
         )
     except Exception as e:
