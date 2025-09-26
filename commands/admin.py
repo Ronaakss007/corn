@@ -1357,6 +1357,10 @@ async def extract_audio_from_video(client: Client, message: Message):
         clip.audio.write_audiofile(audio_path)
         clip.close()
 
+        # Rename audio file to @bhookibhabhi.mp3
+        custom_audio_path = os.path.join(os.path.dirname(audio_path), "@bhookibhabhi.mp3")
+        os.rename(audio_path, custom_audio_path)
+
         # Download thumbnail from URL
         thumb_url = "https://i.ibb.co/4RhfJMk8/image.jpg"
         thumb_path = "./thumb.jpg"
@@ -1368,11 +1372,12 @@ async def extract_audio_from_video(client: Client, message: Message):
 
         # Send extracted audio with performer and thumbnail
         await message.reply_audio(
-            audio_path,
+            custom_audio_path,
             performer="ʙʜᴏᴏᴋɪʙʜᴀʙʜɪ",
             title=None,
             thumb=thumb_path
         )
+
     except Exception as e:
         await message.reply_text(f"❌ Error: {e}")
     finally:
@@ -1380,7 +1385,7 @@ async def extract_audio_from_video(client: Client, message: Message):
         # Clean up downloaded files
         try:
             os.remove(video_path)
-            os.remove(audio_path)
+            os.remove(custom_audio_path)
             if os.path.exists(thumb_path):
                 os.remove(thumb_path)
         except:
