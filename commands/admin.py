@@ -1333,7 +1333,10 @@ async def cleanup_files(client, message):
     except Exception as e:
         await message.reply_text(f"❌ Failed to clean up files:\n`{e}`")
 
-from moviepy.editor import VideoFileClip
+from moviepy import VideoFileClip
+
+from pyrogram.types import InputMediaPhoto
+import aiohttp
 
 @Client.on_message(filters.command("extract") & filters.reply)
 async def extract_audio_from_video(client: Client, message: Message):
@@ -1342,7 +1345,7 @@ async def extract_audio_from_video(client: Client, message: Message):
     if not reply.video:
         return await message.reply_text("⚠️ Please reply to a video to extract audio.")
 
-    processing = await message.reply_text("🎵 Exᴛʀᴀᴄᴛɪɴɢ ᴀᴜᴅɪᴏ... Pʟᴇᴀsᴇ ᴡᴀɪᴛ.")
+    processing = await message.reply_text("<b>🎵 Exᴛʀᴀᴄᴛɪɴɢ ᴀᴜᴅɪᴏ... Pʟᴇᴀsᴇ ᴡᴀɪᴛ.</b>")
 
     try:
         # Download video
@@ -1354,8 +1357,22 @@ async def extract_audio_from_video(client: Client, message: Message):
         clip.audio.write_audiofile(audio_path)
         clip.close()
 
-        # Send extracted audio back to user
-        await message.reply_audio(audio_path,performer="ʙʜᴏᴏᴋɪʙʜᴀʙʜɪ")
+        # Download thumbnail from URL
+        thumb_url = "https://i.ibb.co/4RhfJMk8/image.jpg"
+        thumb_path = "./thumb.jpg"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(thumb_url) as resp:
+                if resp.status == 200:
+                    with open(thumb_path, "wb") as f:
+                        f.write(await resp.read())
+
+        # Send extracted audio with performer and thumbnail
+        await message.reply_audio(
+            audio_path,
+            performer="ʙʜᴏᴏᴋɪʙʜᴀʙʜɪ",
+            title=os.path.basename(audio_path),
+            thumb=thumb_path
+        )
     except Exception as e:
         await message.reply_text(f"❌ Error: {e}")
     finally:
@@ -1364,5 +1381,7 @@ async def extract_audio_from_video(client: Client, message: Message):
         try:
             os.remove(video_path)
             os.remove(audio_path)
+            if os.path.exists(thumb_path):
+                os.remove(thumb_path)
         except:
             pass
