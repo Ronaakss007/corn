@@ -13,7 +13,7 @@ class Config:
     
     API_ID: int = 22505271
     API_HASH: str = "c89a94fcfda4bc06524d0903977fc81e"
-    BOT_TOKEN: str = "8427974914:AAF7807RmCuY-oAtXA3QHpoR-zCYC0uYPtk"
+    BOT_TOKEN: str = "7906609267:AAHzRojZdg9U8CmACeajW192l4SWayw6CGw"
     BOT_USERNAME: str = "getcornbot"
     BOT_NAME: str = "VɪᴅXᴛʀᴀᴄᴛᴏʀ"
     
