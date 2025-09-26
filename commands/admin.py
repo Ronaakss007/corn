@@ -1390,3 +1390,35 @@ async def extract_audio_from_video(client: Client, message: Message):
                 os.remove(thumb_path)
         except:
             pass
+
+from bs4 import BeautifulSoup
+
+@Client.on_message(filters.command("scrape") & filters.private)
+async def extract_pastelink(client: Client, message: Message):
+    if len(message.command) < 2:
+        return await message.reply_text("⚠️ Please provide a link.\nUsage: /extract <link>",)
+
+    url = message.command[1]
+    await message.reply_text("<b>🔍 Fᴇᴛᴄʜɪɴɢ ᴄᴏɴᴛᴇɴᴛ...</b>")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                html = await resp.text()
+
+        soup = BeautifulSoup(html, "html.parser")
+        body_div = soup.find("div", id="body-display")
+
+        if not body_div:
+            return await message.reply_text("❌ Could not find content on this page.")
+
+        # Get text content
+        text_content = body_div.get_text(separator="\n", strip=True)
+        # Extract all links inside this div
+        links = [a['href'] for a in body_div.find_all("a", href=True)]
+
+        response = f"<b>Content:\n{text_content}\n\nLinks:</b>\n" + "\n".join(links)
+        await message.reply_text(response)
+
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {e}")

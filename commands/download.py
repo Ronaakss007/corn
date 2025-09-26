@@ -76,7 +76,7 @@ def not_admin_user(_, __, message):
     "start", "ping", "help", "stats", "mystats", "leaderboard", "history", "cancel",
     "fix_dumps", "check_dumps", "force_meet", "reset_stats", "broadcast", 
     "watermark", "logs", "cleanup", "restart", "test", "files", "admin", "addchannel",
-    "refresh", "showchannels", "removechannel", "refreshchannels"
+    "refresh", "showchannels", "removechannel", "refreshchannels","scrape","extract"
 ]), group=10)
 async def handle_url_message(client: Client, message: Message):
     """Handle URL messages for download - Production version with concurrent support"""
